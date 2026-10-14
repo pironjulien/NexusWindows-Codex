@@ -1,0 +1,15 @@
+# Application-specific observations
+
+Measured on Julien's Windows desktop on 2026-10-11. Discover current labels and IDs again; none of these notes authorizes external messages.
+
+| Application | Observed behavior | Preferred route |
+| --- | --- | --- |
+| Notepad, Store version | Sky returned no accessibility text. Native UIA exposed `document` / `Éditeur de texte`, menus, tabs and editor content. Three lines including French accents, Ω and 😀 survived Sky text input and exact native readback. | Native semantics and text readback; Sky literal input after checking focus. |
+| Windows Save As dialog | `ValuePattern.SetValue` changed the filename shown by UIA but did not update the filename committed by this Notepad dialog. The defect was detected by checking the output file, then verified with keyboard input. Multiple providers also marked both containers and the edit as focused; the extension now prefers the deepest editable focused control. | Focus the observed filename edit, Ctrl+A, inspect focus, then `typeText` the absolute path. Invoke Save, then independently verify the file path and contents. Do not use `setValue` for this filename field. |
+| Calculator, UWP | Main HWND belongs to ApplicationFrameHost. Native extension verifies the descendant application ID. Buttons have stable automation IDs such as `num7Button`, `plusButton`, `equalButton`, `clearButton`. | Native Invoke and result postcondition on `CalculatorResults`. |
+| Win32 laboratory, French locale | Sky exposed `Modifier` and `zone de liste modifiable`, combined state flags, and indexed controls. Button and checkbox events were independently confirmed; Unicode ValuePattern text was read back by both Sky and native UIA. Sky omitted the checkbox's checked state. | Semantic selectors and application postconditions. Missing check state is unknown. Physical input and occluded screenshots still need care: a focus attempt and an append-text attempt did not meet their postconditions during the audit. |
+| Antigravity, Electron | Sky exposed its accessibility tree, buttons, navigation links and message input in a read-only inspection. | Supported accessibility first; draft/submission remain separate and require the requested messaging scope. No private Electron debugging API. |
+| Codex / ChatGPT | Official app tools expose chat reading, creation, messaging and navigation. | Use these tools under their authorization rules. Never automate its own Windows UI through this extension. |
+| Roblox Studio, InDesign, Unreal, Excel | Dedicated connectors/skills are available depending on the session. | Use their structured interfaces for document/game state; use GUI observation to verify visible behavior where needed. These apps have not been certified by this package's live tests. |
+
+For a new application, start with one exact window and one reversible task. Inspect semantics and pixels only as needed. A successful call is weaker evidence than a verified application result. Learn a small useful routine after a verified transition, then revalidate on every reuse. Do not maintain a guessed atlas of screen coordinates.
