@@ -12,6 +12,7 @@ import path from 'node:path';
 import { WindowsSession } from '../../lib/session.mjs';
 import { NativeUIA } from '../../lib/native.mjs';
 import { EmergencyStop } from '../../lib/stop.mjs';
+import { startBenchForm } from './bench-forms.mjs';
 
 const executable = process.env.NEXUS_LIVE_EXE;
 const fixture = process.env.NEXUS_LIVE_FIXTURE;
@@ -23,8 +24,12 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // image (la session passe donc par UIA natif) et AUCUNE entrée physique : toute tentative est comptée et échoue.
 class LabSky {
   target = 'windows'; physical = [];
-  constructor(native, pid) { this.native = native; this.pid = pid; }
-  async list_windows() { return (await this.native.listWindows(this.pid)).windows.map(({ id, app, title }) => ({ id, app, title })); }
+  constructor(native, pid) { this.native = native; this.pids = [pid]; }
+  async list_windows() {
+    const all = [];
+    for (const pid of this.pids) all.push(...(await this.native.listWindows(pid)).windows.map(({ id, app, title }) => ({ id, app, title })));
+    return all;
+  }
   async get_window({ id, app }) {
     const found = (await this.list_windows()).find(w => w.id === id && (app === undefined || w.app === app));
     if (!found) throw new Error('Window is gone');
@@ -51,8 +56,15 @@ test('live background validation on self-created covered windows', { skip: !exec
   const exited = new Promise(resolve => child.once('close', resolve));
   const stop = new EmergencyStop({ directory: process.env.NEXUS_SHARED_HOME ?? path.join(work, 'shared') });
   const measures = [];
-  let session, labNative, sessionNative;
+  let session, labNative, sessionNative, samplerNative, sampling = false, sampler;
+  // Formulaires du banc hébergés par powershell.exe (WinForms et WPF .NET Framework), lancés en parallèle.
+  const benchForms = Promise.allSettled([startBenchForm('winforms'), startBenchForm('wpf')]);
+  let winformsBench, wpfBench;
   try {
+    const [wf, wp] = await benchForms;
+    if (wf.status === 'rejected') throw wf.reason;
+    if (wp.status === 'rejected') throw wp.reason;
+    winformsBench = wf.value; wpfBench = wp.value;
     let ready;
     for (let i = 0; i < 150 && !ready; i++) {
       try { ready = JSON.parse(await readFile(path.join(evidence, 'ready.json'), 'utf8')); } catch { await delay(100); }
@@ -65,7 +77,21 @@ test('live background validation on self-created covered windows', { skip: !exec
     labNative = new NativeUIA(executable);
     sessionNative = new NativeUIA(executable, { emergencyStop: stop });
     const sky = new LabSky(labNative, ready.pid);
+    sky.pids.push(winformsBench.pid, wpfBench.pid);
     session = new WindowsSession(sky, { stateRoot: path.join(work, 'state'), native: sessionNative, emergencyStop: stop });
+    // Vol de premier plan : la fenêtre au premier plan est échantillonnée toutes les 20 ms pendant tous les scénarios
+    // d'arrière-plan ; elle ne doit jamais appartenir à un processus de test.
+    const fixturePids = new Set([ready.pid, winformsBench.pid, wpfBench.pid]);
+    const foreground = { samples: 0, hits: [] };
+    samplerNative = new NativeUIA(executable);
+    sampling = true;
+    sampler = (async () => {
+      while (sampling) {
+        const p = await samplerNative.probe().catch(() => null);
+        if (p) { foreground.samples++; if (fixturePids.has(p.foregroundPid)) foreground.hits.push(p.foreground); }
+        await delay(20);
+      }
+    })();
 
     // Action d'arrière-plan vérifiée : postcondition, technique, premier plan et curseur intacts.
     const background = async (label, observation, request, { technique = /^background:/ } = {}) => {
@@ -187,6 +213,92 @@ test('live background validation on self-created covered windows', { skip: !exec
       assert.equal(s['wpf.text'], 'WPF ok');
     });
 
+    // Liste déroulante classique (.NET 8 WinForms et Win32 natif) : ouverte par CB_SHOWDROPDOWN, option choisie DANS la
+    // liste ouverte (fermée d'abord, puis CB_SETCURSEL + CBN_SELCHANGE), liste relue fermée.
+    await t.test('classic combo boxes: open the list, choose in the open list, the list is closed again', async () => {
+      for (const [id, combo, option, statusId, expected, counter] of [
+        [ready.winforms, { automationId: 'couleur' }, 'Bleu', 'etat', 'Couleur Bleu', 'winforms.colorChanged'],
+        [ready.win32, { automationId: '104', role: 'combobox' }, 'Charlie', '106', 'Choix Charlie', 'win32.comboChanged'],
+      ]) {
+        await session.bind({ id });
+        const before = (await state())[counter];
+        let obs = await session.observe();
+        obs = (await background('Classic combo open', obs, { kind: 'secondary', selector: combo, action: 'Expand', expect: { selector: combo, field: 'expanded', equals: true } }, { technique: /^background:messages$/ })).observation;
+        assert.deepEqual(obs.windowStack, [id]); // la ComboLBox ouverte n'est pas suivie comme une fenêtre
+        assert.ok(obs.popups.length >= 1);
+        obs = (await background('Classic combo choose in open list', obs, { kind: 'click', selector: { name: option, role: 'listitem' }, expect: text(statusId, expected) }, { technique: /^background:messages$/ })).observation;
+        const current = obs.elements.find(e => e.role === 'combobox' && (e.automationId === combo.automationId));
+        assert.equal(current.expanded, false);
+        assert.equal(current.value, option);
+        assert.equal((await state())[counter], before + 1);
+      }
+    });
+
+    // Banc réel : « ouvrir la liste puis choisir Bravo puis Valider », formulaires hébergés par powershell.exe.
+    const bench = async (label, form, family) => {
+      await session.bind({ id: form.hwnd });
+      let obs = await session.observe();
+      assert.equal(obs.source, 'native-uia');
+      const field = n => family === 'wpf' ? { automationId: n, role: 'edit' } : { name: n, role: 'edit' };
+      const formule = { name: 'Formule', role: 'combobox' };
+      const resultat = { automationId: 'resultat' };
+      const valider = { name: 'Valider', role: 'button' };
+      const expected = 'Résultat : Nom=Julien;Email=julien@exemple.fr;Ville=Paris;Accepter=oui;Formule=Bravo;Envois=1';
+      const steps = [
+        ...[['Nom', 'Julien'], ['Email', 'julien@exemple.fr'], ['Ville', 'Paris']].map(([n, v]) => ({ kind: 'setValue', selector: field(n), value: v, expect: { selector: field(n), field: 'value', equals: v } })),
+        { kind: 'click', selector: { name: 'Accepter', role: 'checkbox' }, expect: { selector: { name: 'Accepter', role: 'checkbox' }, field: 'checked', equals: true } },
+        // WPF : d'abord un choix direct (liste fermée, dépliée puis repliée par le helper), puis le parcours du banc.
+        ...(family === 'wpf' ? [{ kind: 'select', selector: formule, option: 'Alpha', expect: { selector: formule, field: 'value', equals: 'Alpha' } }] : []),
+        { kind: 'secondary', selector: formule, action: 'Expand', expect: { selector: formule, field: 'expanded', equals: true } },
+        { kind: 'click', selector: { name: 'Bravo', role: 'listitem' }, expect: { selector: formule, field: 'value', equals: 'Bravo' } },
+        { kind: 'click', selector: valider, expect: { selector: resultat, field: 'name', equals: expected } },
+      ];
+      const before = await probeNative.probe();
+      const started = Date.now();
+      const batch = await session.actBatch(obs, steps);
+      const elapsed = Date.now() - started;
+      const after = await probeNative.probe();
+      assert.equal(batch.status, 'completed', JSON.stringify(batch.steps));
+      for (const s of batch.steps) {
+        assert.match(s.technique, /^background:/, label + ' ' + s.kind);
+        assert.equal(s.foregroundTaken, false, label + ' ' + s.kind);
+        measures.push({ label: label + ' ' + steps[s.index].kind + (steps[s.index].selector?.name ?? steps[s.index].selector?.automationId ? ' ' + (steps[s.index].selector.name ?? steps[s.index].selector.automationId) : ''), technique: s.technique, durationMs: s.durationMs });
+      }
+      measures.push({ label: label + ' (lot complet)', technique: 'batch', durationMs: elapsed });
+      if (after.idleMs >= elapsed + 50) assert.deepEqual(after.cursor, before.cursor, label + ': cursor moved');
+      obs = batch.observation;
+      const combo = obs.elements.find(e => e.role === 'combobox' && e.name === 'Formule');
+      assert.equal(combo.value, 'Bravo');
+      assert.equal(combo.expanded, false, label + ': list left open');
+      assert.deepEqual(obs.popups, [], label + ': popup left open');
+      assert.deepEqual(obs.windowStack, [form.hwnd]);
+      assert.equal(obs.elements.find(e => e.automationId === 'resultat').name, expected);
+      // Postcondition triviale (« le bouton existe ») : refusée avant toute entrée ; condition précise déjà vraie :
+      // already-satisfied ; dans les deux cas rien n'est renvoyé (Envois=1).
+      await assert.rejects(session.act(obs, { kind: 'click', selector: valider, expect: { selector: valider, exists: true } }), error => error.beforeInput === true);
+      const again = await session.act(await session.observe(), { kind: 'click', selector: valider, expect: { selector: resultat, field: 'name', equals: expected } });
+      assert.equal(again.status, 'already-satisfied');
+      assert.equal((await session.observe()).elements.find(e => e.automationId === 'resultat').name, expected);
+    };
+    await t.test('bench WinForms hosted by powershell.exe: open the list, choose Bravo, validate (Formule=Bravo, Envois=1)', () => bench('Banc WinForms', winformsBench, 'winforms'));
+    await t.test('bench WPF hosted by powershell.exe: choose directly, open the list, choose Bravo, validate (Formule=Bravo, Envois=1)', () => bench('Banc WPF', wpfBench, 'wpf'));
+
+    await t.test('a console window is refused while a GUI window of the same powershell.exe is allowed', async () => {
+      const listed = (await labNative.listWindows(winformsBench.pid)).windows;
+      assert.ok(listed.some(w => w.id === winformsBench.hwnd));
+      assert.equal(listed.some(w => w.id === winformsBench.console), false);
+      const fake = { id: winformsBench.console, app: listed[0].app };
+      await assert.rejects(labNative.inspect(fake), /Console and terminal windows/);
+      await assert.rejects(sessionNative.call(fake, 'click', { selector: { name: 'x' }, mode: 'background' }), error => error.refused === true && /Console and terminal/.test(error.message));
+    });
+
+    await t.test('no fixture window ever took the foreground during the background scenarios', async () => {
+      sampling = false; await sampler;
+      measures.push({ label: 'Échantillons du premier plan (20 ms)', technique: `${foreground.hits.length} sur ${foreground.samples} sur une fenêtre de test`, durationMs: 0 });
+      assert.ok(foreground.samples > 50);
+      assert.deepEqual(foreground.hits, []);
+    });
+
     await t.test('no physical Sky input was ever attempted by the background scenarios', () => {
       assert.deepEqual(sky.physical, []);
     });
@@ -206,8 +318,10 @@ test('live background validation on self-created covered windows', { skip: !exec
       measures.push({ label: 'Foreground fallback (SetFocus)', technique: result.technique, durationMs: result.durationMs, foregroundTaken: result.foregroundTaken });
     });
   } finally {
+    sampling = false; await sampler?.catch(() => {});
     await session?.close().catch(() => {});
-    labNative?.close(); sessionNative?.close(); probeNative.close();
+    labNative?.close(); sessionNative?.close(); samplerNative?.close(); probeNative.close();
+    for (const form of (await benchForms).filter(r => r.status === 'fulfilled').map(r => r.value)) await form.close();
     stop.close();
     child.stdin.end();
     const timer = setTimeout(() => child.kill(), 5000);

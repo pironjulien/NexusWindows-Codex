@@ -8,9 +8,11 @@ Use `createWindowsSession(sky)` from the installed `entry.mjs`. It sets the cano
 - `bind({id?, app?, title?})` requires exactly one exact match and discards prior state.
 - `observe({mode:'text'|'image'|'both'})` defaults to text. Image mode is appropriate for a canvas; both is appropriate when visual and semantic evidence are both necessary.
 - `observe({mode:'image'|'both', capture:'native'})` captures the window with `PrintWindow(PW_RENDERFULLCONTENT)` without bringing it forward, even covered; DPI-unaware windows are scaled to their displayed size and the image is cropped to the DWM frame. `obs.images` = `[{path, width, height, method:'printwindow'|'printwindow-dpi-scaled', scale, ms, frame}]`: a local PNG under `%LOCALAPPDATA%/NexusCodex/ComputerUse/captures` (10 minutes, 32 files) to open with `view_image`. Blank, minimized or failed: `obs.imageFallback` gives the reason and `obs.screenshots` holds Sky's screenshot (Windows.Graphics.Capture). Native images are never coordinate targets.
-- Every observation has `windowStack` (followed window ids, bound window first) and `windowChange` (`null`, or `{reason:'opened'|'closed', from, to}`). `observe()` follows a new owned dialog, or an owned window when the front window is disabled (modal); windows already open at `bind` are not followed.
+- Every observation has `windowStack` (followed window ids, bound window first) and `windowChange` (`null`, or `{reason:'opened'|'closed', from, to}`). `observe()` follows a new owned dialog, or an owned window when the front window is disabled (modal); windows already open at `bind` are not followed. Transient popups (an open drop-down list, a tooltip, a WPF popup: caption-less, non-activatable, or a Win32 `ComboLBox`) are never followed: their content is read through the window's own tree, and they are listed in `obs.popups` (`[{id, className}]`). Bind one explicitly only if its content is missing from the window (a WPF context menu).
 - Add `backend:'native'` to inspect controls missing from a nonempty Sky tree, or `backend:'sky'` to return to Sky. The default `auto` retains the selected provider. Inspect the new observation before acting; provider changes never silently retarget an action.
 - `activate()` restores/activates the bound window and returns a new combined observation.
+- Native elements carry `expanded` (`true`/`false`, `null` without an ExpandCollapse state). A combo box's `value` is its chosen option: Value pattern, else the Selection pattern (WPF), else `CB_GETCURSEL` for Win32/WinForms. The options of a Win32/WinForms combo box are read by messages, list open or closed, as `list` and `listitem` children (runtime identity `[-1, window, kind, rank]`); a click on such an option chooses it by its rank.
+- Console and terminal windows (classes `ConsoleWindowClass`, `PseudoConsoleWindow`, `CASCADIA_HOSTING_WINDOW_CLASS`) are refused whatever process they are attributed to, as are Windows Terminal, conhost, OpenConsole and PowerShell ISE. A WinForms or WPF window hosted by `powershell.exe` is an ordinary application window.
 - `close()` invalidates the session and closes its native worker. It does not close the application.
 - `summarize(obs)` emits tree, focus, source and screenshot metadata without duplicating image payloads.
 
@@ -39,9 +41,9 @@ Use a screenshot ID you actually inspected; if multiple regions are returned, ch
 
 Semantic `click` (one left click), `setValue`, `typeText`, `secondary` (Expand/Collapse), `select` and `menu` go first to the native helper in background mode, for Sky and native observations alike (a Sky observation is matched again by selector in the helper's own tree; a native one also by runtime identity):
 
-- Win32 controls: `BN_CLICKED` to the parent (plus `BM_SETCHECK` for auto check boxes and auto radio groups), `EM_SETSEL`+`EM_REPLACESEL` (`setValue`; `typeText` inserts at the caret; a single-line field refuses line breaks), `CB_SETCURSEL`+`CBN_SELCHANGE`, `LB_SETCURSEL`+`LBN_SELCHANGE` (also a click on a list item), `TCM_SETCURFOCUS`, `WM_COMMAND` for menus; UIA Toggle. Never UIA Invoke (foreground) nor UIA Select on a list (silent).
-- WinForms: UIA Invoke/Toggle; Edit, ComboBox and ListBox by messages.
-- WPF, UWP/WinUI, Chromium/Electron: COM UI Automation with `AutoSetFocus = FALSE` in the `--com-worker` child process (Invoke, Toggle, Value, SelectionItem, ExpandCollapse; a closed list is expanded, the option selected, then the list collapsed again).
+- Win32 controls: `BN_CLICKED` to the parent (plus `BM_SETCHECK` for auto check boxes and auto radio groups), `EM_SETSEL`+`EM_REPLACESEL` (`setValue`; `typeText` inserts at the caret; a single-line field refuses line breaks), combo box: `secondary` Expand/Collapse by `CB_SHOWDROPDOWN` read back by `CB_GETDROPPEDSTATE`, `select` or a click on an option (open list included) by `CB_SETCURSEL`+`CBN_SELCHANGE`+`CBN_SELENDOK` after closing an open list first (closing is a cancel that restores the previous choice), `LB_SETCURSEL`+`LBN_SELCHANGE` (also a click on a list item), `TCM_SETCURFOCUS`, `WM_COMMAND` for menus; UIA Toggle. Never UIA Invoke (foreground) nor UIA Select on a list (silent).
+- WinForms: UIA Invoke/Toggle; Edit, ComboBox (as Win32) and ListBox by messages.
+- WPF, UWP/WinUI, Chromium/Electron: COM UI Automation with `AutoSetFocus = FALSE` in the `--com-worker` child process (Invoke, Toggle, Value, SelectionItem, ExpandCollapse read back by its state). A combo box is always closed again after a choice: `select` (published option, else expand, choose, collapse) or a click on an option of the open list.
 
 Options match exactly (whitespace-normalised), then case-insensitively; never partially; duplicates are refused. Menu paths match the full path, else a unique suffix; a disabled command or a disabled window (modal dialog) is refused.
 
@@ -53,7 +55,13 @@ Request fields are specific to each action. Unrelated fields are rejected, and a
 
 Focus an observed editable surface and inspect the refresh before `typeText`. The function checks fresh keyboard focus and the original field's identity and ancestor context. Native runtime IDs must remain unchanged, even when labels match. `setValue` only uses a writable ValuePattern; an unsupported operation is reported, never silently redirected to keyboard input. Password controls are refused. Literal newlines stay text; submission is a distinct, authorized key action.
 
-Append an explicit `expect` to verify the result:
+Append an explicit `expect` to verify the result. It must describe the **effect** of the action:
+
+- A postcondition that only restates the target (`exists:true` on the target, or its label already given by the selector) is refused at validation (`beforeInput`, also for every batch step before any input).
+- Already true **before** the action: `already-satisfied` (nothing sent) only for a precise state the action changes, `equals` on the target's `value`, `checked`, `selected`, `expanded` or `focused`, or `equals` on another element (a result label: a send already made is not resent). Otherwise (`exists`, `includes`, the target's label) the action is refused before input: such a condition cannot tell its effect from the previous state.
+- Expand/Collapse: `{selector:<the control>, field:'expanded', equals:true|false}`. A combo box choice (`select`, or a click on an option): `{selector:<the combo box>, field:'value', equals:'Bravo'}`; a postcondition on the option element itself is refused (exposed only while the list is open, or always present, depending on the provider).
+
+Examples:
 
 ```js
 expect:{selector:{automationId:'Result'},field:'value',equals:'expected value'}
@@ -62,7 +70,7 @@ expect:{selector:{automationId:'BusyIndicator'},exists:false}
 expect:{selector:{role:'document',name:'Editor'},field:'focused',equals:true}
 ```
 
-Supported fields: `name`, `value`, `selected`, `checked`, `disabled`, `description`, `focused`. An `includes` text condition may replace `equals`; prefer equality when exact output matters. `timeoutMs` bounds additional observation polling (default 1618 ms, maximum 15 seconds), not the underlying SDK input. Native requests have a 10-second worker timeout; a timeout during an action is an unknown outcome, never a safe retry signal. The native MTA process is reused for sequential requests, exits after 30 seconds idle, and is killed on timeout or protocol failure. The next explicit request starts a fresh process; no previous request is replayed.
+Supported fields: `name`, `value`, `selected`, `checked`, `expanded`, `disabled`, `description`, `focused`. An `includes` text condition may replace `equals`; prefer equality when exact output matters. `timeoutMs` bounds additional observation polling (default 1618 ms, maximum 15 seconds), not the underlying SDK input. Native requests have a 10-second worker timeout; a timeout during an action is an unknown outcome, never a safe retry signal. The native MTA process is reused for sequential requests, exits after 30 seconds idle, and is killed on timeout or protocol failure. The next explicit request starts a fresh process; no previous request is replayed.
 
 Missing value, description, selection, check or focus evidence stays `null`; it cannot satisfy `equals:false` or `equals:''`. Sky can omit a checkbox's checked state even when the real checkbox is on. Prefer a separate application result or explicit native evidence for such a condition. Native indeterminate toggle state is also `null`.
 
@@ -82,7 +90,7 @@ globalThis.batch = await win.actBatch(obs, [
 globalThis.obs = batch.observation; // null after an unknown outcome: observe again
 ```
 
-1 to 32 steps, each with an `expect`; all steps are validated before any input. Each step uses the observation refreshed by the previous step. The batch returns `{status:'completed'|'stopped', stoppedAt?, completed, steps:[{index, kind, status, verified, performed, technique, foregroundTaken, julienInput, windowChange, durationMs, error?}], observation}` and stops at the first step that is not `verified`/`already-satisfied`, or is `unknown`, `deferred`, `julien-active`, `refused` or interrupted. An emergency stop is rethrown with `error.batch`.
+1 to 32 steps, each with an `expect`; all steps are validated before any input. Each step uses the observation refreshed by the previous step; an observation younger than 162 ms (the previous step's) is not read a second time before input, the helper re-reading the target and its ancestors at input time anyway. The batch returns `{status:'completed'|'stopped', stoppedAt?, completed, steps:[{index, kind, status, verified, performed, technique, foregroundTaken, julienInput, windowChange, durationMs, error?}], observation}` and stops at the first step that is not `verified`/`already-satisfied`, or is `unknown`, `deferred`, `julien-active`, `refused` or interrupted. An emergency stop is rethrown with `error.batch`.
 
 ### Julien's presence
 

@@ -5,7 +5,7 @@ API (`@oai/sky`) for window inventory, screenshots and physical input, and adds 
 the background first**: Win32 messages and UI Automation without focus, so the user keeps their mouse, keyboard and
 foreground window. Every action is checked against an explicit postcondition.
 
-Version 1.3.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+Version 1.4.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
 
 ## Why
 
@@ -26,14 +26,22 @@ Each semantic `click`, `setValue`, `typeText`, `secondary`, `select` and `menu` 
 
 | UI family | Background technique | Never used |
 |---|---|---|
-| Win32 | `BN_CLICKED` to the parent (`BM_SETCHECK` for check boxes and radio groups), `EM_SETSEL` + `EM_REPLACESEL`, `CB_SETCURSEL` + `CBN_SELCHANGE`, `LB_SETCURSEL` + `LBN_SELCHANGE`, `TCM_SETCURFOCUS`, menu `WM_COMMAND`; UIA Toggle | UIA Invoke (the Win32 proxy calls `SetForegroundWindow`), UIA Select on a list (silent) |
-| WinForms | UIA Invoke/Toggle; messages for Edit, ComboBox and ListBox | `BN_CLICKED` on a check box, UIA Select on a list |
-| WPF, UWP/WinUI, Chromium/Electron | COM UI Automation with `AutoSetFocus = FALSE`: Invoke, Toggle, Value, SelectionItem, ExpandCollapse | |
+| Win32 | `BN_CLICKED` to the parent (`BM_SETCHECK` for check boxes and radio groups), `EM_SETSEL` + `EM_REPLACESEL`, combo box list opened and closed by `CB_SHOWDROPDOWN` (read back by `CB_GETDROPPEDSTATE`), option chosen by `CB_SETCURSEL` + `CBN_SELCHANGE` + `CBN_SELENDOK` (an open list is closed first: that close is a cancel which restores the previous choice), `LB_SETCURSEL` + `LBN_SELCHANGE`, `TCM_SETCURFOCUS`, menu `WM_COMMAND`; UIA Toggle | UIA Invoke (the Win32 proxy calls `SetForegroundWindow`), UIA Select on a list (silent) |
+| WinForms | UIA Invoke/Toggle; messages for Edit, ComboBox (same as Win32, open list included) and ListBox | `BN_CLICKED` on a check box, UIA Select on a list |
+| WPF, UWP/WinUI, Chromium/Electron | COM UI Automation with `AutoSetFocus = FALSE`: Invoke, Toggle, Value, ExpandCollapse (state read back), SelectionItem; a combo box is closed again after any choice | |
 
 A measured detail drives the design: once the managed `System.Windows.Automation` client has been used in a process,
 a COM Invoke or Toggle from that same process activates the target window despite `AutoSetFocus = FALSE` (WPF and
 WinForms on .NET 8). UI Automation patterns are therefore sent from a child process (`--com-worker`) that never loads
-the managed client.
+the managed client. Since 1.4.0 the managed client is not loaded anywhere: the tree is read with the COM UI
+Automation client in **one round trip** (`CacheRequest`, `Subtree` scope, control view; about 50 ms for the bench
+forms instead of 150 to 300 ms). For an action, only the target and its ancestors are read again, and any difference
+from the observation is refused.
+
+The options of a Win32/WinForms combo box are read by messages (`CB_GETCOUNT`, `CB_GETLBTEXT`, `CB_GETCURSEL`), open
+or not, as `list`/`listitem` nodes under it; `expanded` comes from `CB_GETDROPPEDSTATE`. Measured: the UIA subtree of
+an open WinForms combo box answers "Malformed Cacheresponse" after about 7 s and then stops answering, so it is never
+walked.
 
 Each technique reads its effect back: `applied`, `none` (nothing changed) or `sent` (no read-back possible).
 Physical fallback happens only when no technique applies, or when the `expect` is not met **and** nothing observable
@@ -47,6 +55,13 @@ whether the foreground was taken, and every attempt.
 a stale observation, another window, a missing or ambiguous control, or a changed control identity aborts the action
 before any input. A truncated UIA value cannot satisfy an exact equality, and an empty tree never proves that a
 control disappeared. Native password fields are refused.
+
+A postcondition already true **before** the action skips it (`already-satisfied`, nothing sent) only when it is a
+precise state (`equals`) that the action changes: `value`, `checked`, `selected`, `expanded` or `focused` on the
+target, or a result on another element. A postcondition that only restates the target ("the button exists") is
+refused, and a non-precise one already true (`exists`, `includes`, the target's label) is refused before any input:
+it could not tell the effect from the previous state. A combo box choice is proven by the combo box `value`, never by
+its option element.
 
 ### Clean capture with PrintWindow
 
@@ -66,6 +81,17 @@ not `verified` or `already-satisfied`.
 The session follows dialogs and popups without a new `bind`: windows owned by the followed windows, windows that
 disable the window in front (modal), and windows of the same process that appear during an action. When a dialog
 closes, the session returns to its nearest open owner. Each observation reports `windowStack` and `windowChange`.
+Transient popups (caption-less `WS_POPUP` windows with `WS_EX_NOACTIVATE`: an open drop-down list, a tooltip, a WPF
+popup; or a Win32 `ComboLBox`) are never followed: they are read through the window's own tree and listed in
+`obs.popups`.
+
+### Excluded windows
+
+Refused before any input: the agent's own application, terminals and console hosts, security and sign-in screens,
+password managers, and **every console or terminal window by its class** (`ConsoleWindowClass`,
+`PseudoConsoleWindow`, `CASCADIA_HOSTING_WINDOW_CLASS`), whatever process Windows attributes it to. A graphical
+window (WinForms, WPF) hosted by `powershell.exe` is not a console and is allowed; until 1.3.0 the whole
+`cmd`/`powershell`/`pwsh` process was refused, which also hid such forms.
 
 ### The user's presence (Raw Input)
 
@@ -204,9 +230,38 @@ Each action: postcondition verified, event counted by the application, foregroun
 | Batch of 3 steps, stopped at step 2 (step 3 never sent) | messages | 658 ms |
 | Capture of the covered Win32 window | PrintWindow, not blank | 19 ms |
 
-Offline suite: 100 JavaScript tests, 95 passed and 5 real-environment tests skipped outside `-Full`
+Offline suite: 108 JavaScript tests, 103 passed and 5 real-environment tests skipped outside `-Full`
 (`test.ps1`, October 16, 2026). Durations are dominated by full UIA tree read-backs. The physical fallback that takes
 the foreground was skipped in that run because the user was active; it is not counted as passed.
+
+### Cross-agent bench (October 16, 2026)
+
+The same task was run by the three Windows desktop agents used on this PC (this layer, the Claude server and the
+Antigravity layer) on WinForms and WPF forms hosted by `powershell.exe`, created without activation at the bottom of
+the z-order while the user kept working: fill three fields, tick a box, open the "Formule" drop-down list, choose
+"Bravo" in the open list, validate. Proof is the result label read back in the application. Here the real session
+and .NET helper ran with a fake Sky that refuses and counts any physical input.
+
+| Check | WinForms | WPF |
+|---|---|---|
+| Three fields | ✓ background:messages, 103 to 124 ms | ✓ background:uia, 170 to 189 ms |
+| Open the list (`expanded = true`) | ✓ verified (1.3.0: wrongly `already-satisfied`) | ✓ verified (1.3.0: `unmet`, then the form's controls were lost) |
+| Choose "Bravo" in the open list, validate | ✓ verified | ✓ verified (1.3.0: validate skipped) |
+| Trivial postcondition ("the button exists") | ✓ refused before any input | ✓ |
+| Application result | `Formule=Bravo;Envois=1` | `Formule=Bravo;Envois=1` |
+| Physical input / foreground taken | 0 / 0 of 123 samples | 0 / 0 |
+| Time (observe + batch) | 0.12 + 1.16 s | 0.11 + 1.41 s (1.3.0: 4.5 to 8 s) |
+
+| Agent | Morning | After fixes |
+|---|---|---|
+| This layer (1.3.0, then 1.4.0) | 16/20 | **19/20** |
+| [claude-windows-computer-use](https://github.com/pironjulien/claude-windows-computer-use) | 17/20 | **19/20** |
+| Antigravity layer | 18/20 | **19/20** |
+
+What still keeps this layer from 20: the real path through Sky inside the Codex app was not measured in this bench
+(fake Sky). `test.ps1 -Full` the same day, with the user idle: 15 real-validation checks passed, 0 failed, 0 skipped;
+physical fallback ✓ (foreground:uia, 123 ms); bench forms WinForms 1.1 s, WPF 2.0 s; 0 of 227 foreground samples
+taken.
 
 ## Security
 

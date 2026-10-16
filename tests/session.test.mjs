@@ -287,7 +287,8 @@ test('native extension supplies missing UIA and retains the fast route in the se
   const obs = await session.observe();
   assert.equal(obs.source, 'native-uia');
   const r = await session.act(obs, { kind: 'click', selector: button, expect: expectDone });
-  assert.equal(r.verified, true); assert.equal(skyCaptures, 1); assert.equal(nativeCaptures, 3);
+  // Observation toute fraîche : pas de seconde lecture complète avant l'entrée (le helper relit la cible et ses ancêtres).
+  assert.equal(r.verified, true); assert.equal(skyCaptures, 1); assert.equal(nativeCaptures, 2);
   await session.remember('native-go', r, { staticUI: true });
   sky.done = false;
   let current = await session.observe();
@@ -372,8 +373,24 @@ test('replacement native control with identical labels is rejected before input'
   await session.bind({ id: 10 });
   const obs = await session.observe({ backend: 'native' });
   native.generation++;
+  await new Promise(resolve => setTimeout(resolve, 200)); // au-delà de la fraîcheur : relue par la session avant l'entrée
   await assert.rejects(session.act(obs, { kind: 'click', selector: button }), /context changed/);
   assert.equal(native.calls.length, 0);
+});
+test('a fresh native observation hands the helper the exact identity and ancestry to re-read before input', async t => {
+  const { sky } = await setup(t);
+  const native = nativeProvider(sky);
+  const session = new WindowsSession(sky, { native });
+  await session.bind({ id: 10 });
+  const obs = await session.observe({ backend: 'native' });
+  await session.act(obs, { kind: 'click', selector: button, expect: expectDone });
+  const [, op, args] = native.calls[0];
+  assert.equal(op, 'click');
+  assert.deepEqual(args.runtimeId, [1, 2]);
+  assert.deepEqual(args.ancestry, [
+    { role: 'window', automationId: '', name: 'Test', runtimeId: [1, 0] },
+    { role: 'group', automationId: 'main', name: '', runtimeId: [1, 1] },
+  ]);
 });
 test('typing cannot follow a homonymous field moved to another ancestor', async t => {
   const { session, sky, observation } = await setup(t);

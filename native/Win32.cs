@@ -19,7 +19,8 @@ static class Win32
     public const uint WM_COMMAND = 0x0111, WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E;
     public const uint BM_GETCHECK = 0x00F0, BM_SETCHECK = 0x00F1;
     public const uint EM_SETSEL = 0x00B1, EM_REPLACESEL = 0x00C2;
-    public const uint CB_GETCOUNT = 0x0146, CB_GETCURSEL = 0x0147, CB_GETLBTEXT = 0x0148, CB_GETLBTEXTLEN = 0x0149, CB_SETCURSEL = 0x014E;
+    public const uint CB_GETCOUNT = 0x0146, CB_GETCURSEL = 0x0147, CB_GETLBTEXT = 0x0148, CB_GETLBTEXTLEN = 0x0149, CB_SETCURSEL = 0x014E,
+        CB_SHOWDROPDOWN = 0x014F, CB_GETDROPPEDSTATE = 0x0157;
     public const uint LB_SETCURSEL = 0x0186, LB_GETCURSEL = 0x0188, LB_GETTEXT = 0x0189, LB_GETTEXTLEN = 0x018A, LB_GETCOUNT = 0x018B;
     public const uint TCM_GETITEMCOUNT = 0x1304, TCM_GETCURSEL = 0x130B, TCM_SETCURFOCUS = 0x1330;
     public const int GWL_STYLE = -16;
@@ -48,6 +49,7 @@ static class Win32
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern nint FindWindowExW(nint parent, nint after, string? cls, string? title);
     public delegate bool EnumProc(nint hwnd, nint data);
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc callback, nint data);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(nint parent, EnumProc callback, nint data);
     [DllImport("user32.dll", SetLastError = true)] public static extern bool PostMessageW(nint hwnd, uint msg, nint wparam, nint lparam);
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
     static extern nint SendMessageTimeout(nint hwnd, uint msg, nint wparam, nint lparam, uint flags, uint timeout, out nint result);
@@ -140,6 +142,16 @@ static class Win32
         return text.ToString();
     }
     public static int Style(nint hwnd) => GetWindowLongW(hwnd, GWL_STYLE);
+    public static int ExStyle(nint hwnd) => GetWindowLongW(hwnd, -20 /* GWL_EXSTYLE */);
+    // Surgissante transitoire : WS_POPUP sans barre de titre qui ne s'active pas (WS_EX_NOACTIVATE : liste deroulante,
+    // infobulle, surgissante WPF), ou liste ouverte d'une liste deroulante Win32 (ComboLBox).
+    public static bool IsTransientPopup(nint hwnd, string cls)
+    {
+        if (string.Equals(cls, "ComboLBox", StringComparison.OrdinalIgnoreCase)) return true;
+        var style = unchecked((uint)Style(hwnd));
+        const uint WS_POPUP = 0x80000000, WS_CAPTION = 0x00C00000, WS_EX_NOACTIVATE = 0x08000000;
+        return (style & WS_POPUP) != 0 && (style & WS_CAPTION) != WS_CAPTION && (unchecked((uint)ExStyle(hwnd)) & WS_EX_NOACTIVATE) != 0;
+    }
     public static uint ProcessOf(nint hwnd) { GetWindowThreadProcessId(hwnd, out var pid); return pid; }
 
     // PostMessage verifie : un refus (fenetre disparue, application elevee bloquee par UIPI) n'est jamais un succes.

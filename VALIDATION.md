@@ -1,5 +1,23 @@
 # Validation Computer Use Windows
 
+## Banc réel corrigé 1.4.0 — 16 octobre 2026
+
+**108 tests JavaScript (103 réussis, 5 réels sautés hors `-Full`), 28 Pester, 21 Python ; `test.ps1` et `test.ps1 -Full` code 0** (14 tests réels jeton/arrêt d'urgence, validation réelle 14 sous-tests réussis, le repli qui prend le premier plan « sauté » : Julien actif).
+
+Défauts du banc du 16/10 reproduits avant correction (formulaires du banc compilés en .NET Framework, session et helper réels, faux Sky sans entrée physique) : liste WPF ouverte suivie comme une fenêtre (arbre de la surgissante seul, puis « found 0 » sur la liste déroulante) ; option WPF non prouvable liste refermée ; arbre lu en 145–306 ms ; 483–501 ms par champ WinForms, 356–505 ms par champ WPF. Mesuré pendant la correction : le sous-arbre UIA d'une liste WinForms ouverte répond « Malformed Cacheresponse » après ~7 s puis ne répond plus (lu désormais par messages) ; une liste Win32 servie par le proxy natif a des éléments sans FrameworkId (désormais hérité du parent, sinon UIA Select silencieux).
+
+Validation réelle (`tests/live`), fenêtres créées par le test, sans activation, au fond de l'empilement, premier plan échantillonné toutes les 20 ms (0 échantillon sur une fenêtre de test, 250 à 310 par passage), aucune entrée physique, curseur immobile quand Julien n'a rien touché :
+
+| Scénario | Résultat dans l'application | Durée |
+| --- | --- | --- |
+| Banc WinForms hébergé par `powershell.exe` : 3 champs, case, Expand (`expanded` relu), clic « Bravo » dans la liste ouverte, Valider | `Formule=Bravo;Envois=1`, liste refermée, aucune surgissante | 1,0–1,3 s le lot de 7 étapes ; champ 110–170 ms |
+| Banc WPF hébergé par `powershell.exe` : idem, précédé d'un `select` direct (Alpha) | `Formule=Bravo;Envois=1`, liste refermée, fenêtre principale gardée | 1,8–2,4 s le lot de 8 étapes ; champ 175–245 ms |
+| Postcondition « le bouton existe » puis condition précise déjà vraie | refusée avant entrée ; `already-satisfied` ; toujours `Envois=1` | — |
+| Listes déroulantes .NET 8 WinForms et Win32 : ouverture, choix dans la liste ouverte | événement compté une fois, liste relue fermée | ouverture ~290 ms, choix 80–130 ms |
+| Fausse console (classe `ConsoleWindowClass`) dans le processus `powershell.exe` du formulaire | refusée (inventaire, lecture, action) ; le formulaire du même processus est permis | — |
+| Fixture 1.3.0 (Win32, WinForms, WPF .NET 8) | toutes les postconditions et compteurs applicatifs | 75–190 ms par action (105–441 ms en 1.3.0) |
+
+Observation native : 50–70 ms (arbre COM en un aller-retour, 45–60 ms) contre 145–306 ms. Les durées varient avec la charge du poste (Julien travaillait). Les entrées physiques Sky ne sont pas testables hors du REPL Codex.
 ## Arrière-plan d'abord 1.3.0 — 15 octobre 2026
 
 **100 tests JavaScript (95 réussis, 5 réels sautés hors `-Full`), 28 Pester, 21 Python ; `test.ps1` code 0.** `test.ps1 -Full` : 14 tests réels jeton/arrêt d'urgence et la validation réelle `tests/live/background.live.mjs`, code 0.

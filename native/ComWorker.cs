@@ -38,7 +38,8 @@ static class ComWorker
         string Text(string key) => request.TryGetProperty(key, out var v) ? v.GetString() ?? "" : "";
         // Avant le motif, tout echec (fenetre ou element disparus, fournisseur absent) precede l'entree.
         nint element;
-        try { element = ComUia.Shared.FindByRuntimeId(window, runtimeId); }
+        var hint = request.TryGetProperty("nativeWindow", out var h) && h.ValueKind == JsonValueKind.Number ? (nint)h.GetInt64() : 0;
+        try { element = ComUia.Shared.FindByRuntimeId(window, runtimeId, hint); }
         catch (Exception error) when (error is not (BackgroundNotApplicableException or EmergencyStopException))
         {
             throw new BackgroundNotApplicableException("UI Automation element unavailable before input: " + error.Message);
@@ -48,15 +49,24 @@ static class ComWorker
             var outcome = op switch
             {
                 "click" => Click(element, request.GetProperty("order").EnumerateArray().Select(e => e.GetString() ?? "").ToArray()),
+                "invoke" => WithPattern(element, ComUia.InvokePatternId, p => { EmergencyStop.ThrowIfStopped(); ComUia.CallSlot(p, 3); return new Outcome(Uia, "Invoke", "sent"); },
+                    () => throw new BackgroundNotApplicableException("No InvokePattern")),
+                "setFocus" => SetFocus(element),
                 "setValue" => SetValue(element, Text("value")),
                 "expandCollapse" => ExpandCollapse(element, Text("action")),
-                "select" => WithPattern(element, ComUia.SelectionItemPatternId, Select, () => throw new BackgroundNotApplicableException("Option is not selectable")),
-                "expandSelect" => ExpandSelect(element, Text("option")),
+                "selectItem" => SelectItem(window, element, request.GetProperty("containerRuntimeId").EnumerateArray().Select(e => e.GetInt32()).ToArray()),
+                "selectOption" => SelectOption(element, Text("option"), request.TryGetProperty("combo", out var c) && c.GetBoolean()),
                 _ => throw new InvalidOperationException("Unknown COM worker operation"),
             };
             return new { ok = true, technique = outcome.Technique, mechanism = outcome.Mechanism, effect = outcome.Effect };
         }
         finally { ComUia.Release(element); }
+    }
+    static Outcome SetFocus(nint element)
+    {
+        EmergencyStop.ThrowIfStopped();
+        ComUia.SetFocus(element);
+        return new("foreground:uia", "SetFocus", ComUia.HasKeyboardFocus(element) ? "applied" : "sent");
     }
 
     static T WithPattern<T>(nint element, int patternId, Func<nint, T> action, Func<T> missing)
@@ -102,30 +112,103 @@ static class ComWorker
         var after = ComUia.Value(pattern);
         return new Outcome(Uia, "Value.SetValue", after == value ? "applied" : after == before ? "none" : "sent");
     }, () => throw new BackgroundNotApplicableException("No writable ValuePattern"));
+    // Etat relu par le motif ExpandCollapse (0 replie, 1 deplie, 2 partiel, 3 feuille), attendu au plus 0,5 s : certains
+    // fournisseurs (WPF) ouvrent leur surgissante de facon asynchrone.
+    static int WaitState(nint pattern, Func<int, bool> reached)
+    {
+        var state = ComUia.ReadInt(pattern, 5);
+        for (var i = 0; i < 10 && !reached(state); i++) { Thread.Sleep(50); state = ComUia.ReadInt(pattern, 5); }
+        return state;
+    }
     static Outcome ExpandCollapse(nint element, string action) => WithPattern(element, ComUia.ExpandCollapsePatternId, pattern =>
     {
+        var before = ComUia.ReadInt(pattern, 5);
         EmergencyStop.ThrowIfStopped();
         ComUia.CallSlot(pattern, action == "Expand" ? 3 : 4);
-        var state = ComUia.ReadInt(pattern, 5); // 0 replie, 1 deplie, 2 partiel, 3 feuille
-        return new Outcome(Uia, action, (action == "Expand" ? state is 1 or 2 : state == 0) ? "applied" : "none");
+        Func<int, bool> reached = action == "Expand" ? s => s is 1 or 2 : s => s == 0;
+        var state = WaitState(pattern, reached);
+        return new Outcome(Uia, action, reached(state) ? "applied" : state == before ? "none" : "sent");
     }, () => throw new BackgroundNotApplicableException("No ExpandCollapsePattern"));
-    static Outcome ExpandSelect(nint element, string option)
+
+    // Option d'une liste deroulante (conteneur) choisie par SelectionItem, puis la liste refermee : une liste laissee
+    // ouverte est une surgissante au-dessus des fenetres de Julien (un clic de sa part y choisirait une option).
+    static Outcome SelectItem(nint window, nint item, int[] containerRuntimeId)
     {
-        var expand = ComUia.Pattern(element, ComUia.ExpandCollapsePatternId);
-        if (expand == 0) throw new BackgroundNotApplicableException("Option is absent from the list");
+        var container = ComUia.Shared.FindByRuntimeId(window, containerRuntimeId);
         try
         {
-            EmergencyStop.ThrowIfStopped();
-            var wasCollapsed = ComUia.ReadInt(expand, 5) == 0;
-            if (wasCollapsed) ComUia.CallSlot(expand, 3);
+            var selected = WithPattern(item, ComUia.SelectionItemPatternId, Select, () => throw new BackgroundNotApplicableException("Option is not selectable"));
+            return Close(container, selected with { Mechanism = "SelectionItem.Select" });
+        }
+        finally { ComUia.Release(container); }
+    }
+    // Liste ou liste deroulante UIA (WPF, XAML, Chromium) : option deja publiee sous le conteneur, sinon depliage sans
+    // focus, choix par SelectionItem, puis repliage (toujours pour une liste deroulante, sinon si elle etait repliee).
+    // Correspondance des options : egalite exacte unique, puis sans casse unique ; jamais partielle.
+    static Outcome SelectOption(nint container, string option, bool combo)
+    {
+        var expand = ComUia.Pattern(container, ComUia.ExpandCollapsePatternId);
+        try
+        {
+            var item = FindOption(container, option, allowAbsent: expand != 0);
+            var opened = false;
+            if (item == 0)
+            {
+                EmergencyStop.ThrowIfStopped();
+                if (ComUia.ReadInt(expand, 5) != 0) throw new BackgroundNotApplicableException("Option is absent from the list");
+                ComUia.CallSlot(expand, 3);
+                opened = true;
+                for (var i = 0; i < 10 && item == 0; i++)
+                {
+                    item = FindOption(container, option, allowAbsent: true);
+                    if (item == 0) Thread.Sleep(50);
+                }
+                if (item == 0)
+                {
+                    Close(container, new Outcome(Uia, "ExpandCollapse", "sent"));
+                    throw new InvalidOperationException("Option did not appear after expanding the list (list collapsed again); outcome unknown");
+                }
+            }
             try
             {
-                var item = ComUia.Shared.FindByName(element, option);
-                if (item == 0) throw new InvalidOperationException("Option did not appear after expanding the list; outcome unknown");
-                try { return WithPattern(item, ComUia.SelectionItemPatternId, Select, () => throw new InvalidOperationException("Option is not selectable; outcome unknown")) with { Mechanism = "ExpandCollapse+SelectionItem.Select" }; }
-                finally { ComUia.Release(item); }
+                Outcome selected;
+                try { selected = WithPattern(item, ComUia.SelectionItemPatternId, Select, () => throw new InvalidOperationException("Option is not selectable; outcome unknown")); }
+                catch (BackgroundNotApplicableException error) when (opened) { throw new InvalidOperationException(error.Message + " (list was expanded; outcome unknown)"); }
+                selected = selected with { Mechanism = (opened ? "ExpandCollapse+" : "") + "SelectionItem.Select" };
+                return combo || opened ? Close(container, selected) : selected;
             }
-            finally { if (wasCollapsed && ComUia.ReadInt(expand, 5) != 0) ComUia.CallSlot(expand, 4); }
+            finally { ComUia.Release(item); }
+        }
+        finally { ComUia.Release(expand); }
+    }
+    static nint FindOption(nint container, string option, bool allowAbsent)
+    {
+        var items = ComUia.Shared.SelectableItems(container);
+        try
+        {
+            int index;
+            try { index = Program.MatchOption(items.Select(i => (string?)i.Name).ToList(), option); }
+            catch (BackgroundNotApplicableException error) when (error.Message.Contains("absent") && allowAbsent) { return 0; }
+            var found = items[index].Element;
+            items[index] = (0, "");
+            return found;
+        }
+        finally { foreach (var (element, _) in items) ComUia.Release(element); }
+    }
+    // Repliage relu apres le choix ; le choix deja fait n'est jamais rejoue. Liste restee ouverte : effet « sent ».
+    static Outcome Close(nint container, Outcome selected)
+    {
+        var expand = ComUia.Pattern(container, ComUia.ExpandCollapsePatternId);
+        if (expand == 0) return selected;
+        try
+        {
+            // Certaines listes se referment d'elles-memes apres le choix : un Collapse tardif peut alors echouer.
+            if (ComUia.ReadInt(expand, 5) is 1 or 2)
+            {
+                try { ComUia.CallSlot(expand, 4); } catch (System.Runtime.InteropServices.COMException) { }
+            }
+            var closed = WaitState(expand, s => s == 0) == 0;
+            return selected with { Mechanism = selected.Mechanism + "+Collapse", Effect = closed ? selected.Effect : "sent" };
         }
         finally { ComUia.Release(expand); }
     }
