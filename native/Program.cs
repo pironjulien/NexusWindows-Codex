@@ -6,11 +6,14 @@ using System.Text.Json;
 using System.Security.Cryptography;
 using System.Windows.Automation;
 
-static class Program
+static partial class Program
 {
     [DllImport("user32.dll")] static extern bool IsWindow(nint hwnd);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetApplicationUserModelId(nint process, ref uint length, StringBuilder? appId);
+    // Lectures : permises pendant l'arret d'urgence, n'envoient aucune entree.
+    static readonly HashSet<string> ReadOnlyOperations = new(StringComparer.Ordinal) { "inspect", "capture", "related", "windows", "probe" };
+    static readonly HashSet<string> ActionOperations = new(StringComparer.Ordinal) { "click", "setValue", "secondary", "select", "typeText" };
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     static string Text(JsonElement e, string key, string fallback = "") => e.TryGetProperty(key, out var v) ? v.GetString() ?? fallback : fallback;
     static readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase)
@@ -21,10 +24,30 @@ static class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
+        if (args.Length == 2 && args[0] == "--foreground-token")
+        {
+            try
+            {
+                // EOF cancels waiting and releases ownership when the caller dies.
+                // Console's synchronized reader can block inside ReadToEndAsync.
+                // Keep EOF monitoring on a worker so acquisition can proceed.
+                var abandoned = Task.Run(() => Console.In.ReadToEnd());
+                using var token = ForegroundToken.Acquire(args[1], abandoned);
+                Write(new { ok = true });
+                Console.Out.Flush();
+                abandoned.GetAwaiter().GetResult();
+                return 0;
+            }
+            catch (Exception error) { Write(new { ok = false, error = error.GetType().Name, message = error.Message }); return 1; }
+        }
+        if (args.Length == 2 && args[0] == "--stop-guard") return EmergencyStop.Guard(args[1]);
+        // Processus COM pur : ne doit jamais charger System.Windows.Automation (voir Background.cs).
+        if (args.SequenceEqual(new[] { "--com-worker" })) return ComWorker.Run();
         if (args.SequenceEqual(new[] { "--server" }))
         {
             // One sequential MTA worker. Every request reacquires the window and controls.
             // EOF ends the worker if its client disappears; the client also enforces deadlines.
+            EmergencyStop.Watch();
             string? line;
             while ((line = Console.ReadLine()) != null) ProcessRequest(line, true);
             return 0;
@@ -56,20 +79,33 @@ static class Program
     }
     static object Execute(JsonElement request)
     {
+        var op = Text(request, "operation");
+        var action = !ReadOnlyOperations.Contains(op);
+        // Emergency stop: refuse every action before touching the window; inspection stays allowed.
+        if (action) EmergencyStop.ThrowIfStopped();
+        if (op == "probe")
+        {
+            var probe = Win32.Probe();
+            return new { ok = true, foreground = (long)probe.Foreground, cursor = new { x = probe.Cursor.X, y = probe.Cursor.Y }, idleMs = unchecked(Win32.GetTickCount() - probe.LastInput) };
+        }
+        if (op == "windows") return ListWindows(request.GetProperty("processId").GetInt32());
+        // Un refus avant toute entree n'est jamais un resultat inconnu : aucune entree n'a ete envoyee.
+        Exception Refuse(string message) => action ? new ActionRefusedException(message) : new InvalidOperationException(message);
         var hwnd = (nint)request.GetProperty("windowId").GetInt64();
         var app = request.GetProperty("app").GetString() ?? "";
-        if (!IsWindow(hwnd)) throw new InvalidOperationException("Window no longer exists");
+        if (!IsWindow(hwnd)) throw Refuse("Window no longer exists");
         GetWindowThreadProcessId(hwnd, out var pid);
         using var process = Process.GetProcessById((int)pid);
-        if (Excluded.Contains(process.ProcessName)) throw new InvalidOperationException("This application requires its dedicated supported tool");
+        if (Excluded.Contains(process.ProcessName)) throw Refuse("This application requires its dedicated supported tool");
         var actualApp = AppId(process);
-        var root = AutomationElement.FromHandle(hwnd) ?? throw new InvalidOperationException("No UI Automation root");
-        var nodes = Read(root);
+        AutomationElement? root = null;
+        List<Node>? read = null;
+        List<Node> Nodes() => read ??= Read(root ??= AutomationElement.FromHandle(hwnd) ?? throw new InvalidOperationException("No UI Automation root"));
         var contentPid = (int)pid;
         if (!string.Equals(app, actualApp, StringComparison.OrdinalIgnoreCase) && process.ProcessName.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
         {
             var matches = new List<int>();
-            foreach (var candidate in nodes.Select(n => n.Element.Current.ProcessId).Distinct())
+            foreach (var candidate in Nodes().Select(n => n.Element.Current.ProcessId).Distinct())
             {
                 using var child = Process.GetProcessById(candidate);
                 if (string.Equals(AppId(child), app, StringComparison.OrdinalIgnoreCase)) matches.Add(candidate);
@@ -77,8 +113,17 @@ static class Program
             if (matches.Count == 1) { actualApp = app; contentPid = matches[0]; }
         }
         if (!string.Equals(app, actualApp, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException($"Window application identity differs: {actualApp}");
-        var op = Text(request, "operation");
+            throw Refuse($"Window application identity differs: {actualApp}");
+        if (op == "capture") return Capture.Window(hwnd, Text(request, "directory"));
+        if (op == "related") return Related(hwnd, pid);
+        if (op == "menu") return MenuCommand(hwnd, Text(request, "path"));
+        if (action && !ActionOperations.Contains(op)) throw new InvalidOperationException("Unknown native operation");
+        List<Node> nodes;
+        try { nodes = Nodes(); }
+        catch (Exception error) when (action && error is not EmergencyStopException)
+        {
+            throw new BackgroundNotApplicableException("Accessibility tree unavailable for a background action: " + error.Message);
+        }
         if (op == "inspect")
         {
             var tree = new StringBuilder();
@@ -116,39 +161,66 @@ static class Program
                     focused = n.Focused, password = n.Password, actions = n.Actions, ancestors = n.Ancestors, runtimeId = n.RuntimeId,
                     bounds = n.Bounds, flags = Array.Empty<string>() }) };
         }
+        // Actions : la cible est retrouvee par son selecteur (observation Sky) ou verifiee par son identite d'execution
+        // (observation native). Toute impossibilite a ce stade precede l'entree : technique suivante permise ou refus.
+        var mode = Text(request, "mode", "background");
+        if (mode is not ("background" or "foreground")) throw new InvalidOperationException("Unknown action mode");
         var selector = request.GetProperty("selector");
-        var targets = nodes.Where(n => Matches(n, selector) && (!selector.TryGetProperty("ancestor", out var a) || n.Ancestors.Any(i => Matches(nodes[i], a)))).ToArray();
-        if (targets.Length != 1) throw new InvalidOperationException($"Semantic target count is {targets.Length}; expected one");
-        var target = targets[0];
-        if (!root.Current.IsEnabled || target.Disabled || !target.Element.Current.IsEnabled) throw new InvalidOperationException("Target or its window is disabled");
-        if (target.Password || target.Element.Current.IsPassword) throw new InvalidOperationException("Password controls require the dedicated supported workflow");
-        var expected = request.GetProperty("runtimeId").EnumerateArray().Select(e => e.GetInt32()).ToArray();
-        if (!expected.SequenceEqual(target.RuntimeId)) throw new InvalidOperationException("Control identity changed; inspect again");
-        string mechanism;
-        if (op == "click")
+        Node target;
+        try
         {
-            if (target.Element.TryGetCurrentPattern(InvokePattern.Pattern, out var p)) { ((InvokePattern)p).Invoke(); mechanism = "Invoke"; }
-            else if (target.Element.TryGetCurrentPattern(SelectionItemPattern.Pattern, out p)) { ((SelectionItemPattern)p).Select(); mechanism = "Select"; }
-            else if (target.Element.TryGetCurrentPattern(TogglePattern.Pattern, out p)) { ((TogglePattern)p).Toggle(); mechanism = "Toggle"; }
-            else if (target.Role is "edit" or "document") { target.Element.SetFocus(); mechanism = "Focus"; }
-            else throw new InvalidOperationException("No semantic click pattern; inspect a screenshot and use Sky coordinates");
+            var targets = nodes.Where(n => Matches(n, selector) && (!selector.TryGetProperty("ancestor", out var a) || n.Ancestors.Any(i => Matches(nodes[i], a)))).ToArray();
+            if (targets.Length != 1) throw new BackgroundNotApplicableException($"Semantic target count is {targets.Length}; expected one");
+            target = targets[0];
+            EmergencyStop.ThrowIfStopped(); // Reading the tree can take seconds: check again just before the input.
+            if (!root!.Current.IsEnabled || target.Disabled || !target.Element.Current.IsEnabled) throw new ActionRefusedException("Target or its window is disabled (a modal dialog may be open)");
+            if (target.Password || target.Element.Current.IsPassword) throw new ActionRefusedException("Password controls require the dedicated supported workflow");
+            if (request.TryGetProperty("runtimeId", out var rid) && rid.ValueKind == JsonValueKind.Array &&
+                !rid.EnumerateArray().Select(e => e.GetInt32()).SequenceEqual(target.RuntimeId)) throw new ActionRefusedException("Control identity changed; inspect again");
+            if (op == "secondary" && !target.Actions.Contains(Text(request, "action"))) throw new ActionRefusedException("Secondary action is not exposed");
         }
-        else if (op == "setValue")
+        catch (Exception error) when (error is not (EmergencyStopException or ActionRefusedException or BackgroundNotApplicableException))
         {
-            if (!target.Element.TryGetCurrentPattern(ValuePattern.Pattern, out var p) || ((ValuePattern)p).Current.IsReadOnly)
-                throw new InvalidOperationException("No writable ValuePattern; focus and use Sky text input");
-            ((ValuePattern)p).SetValue(Text(request, "value")); mechanism = "Value";
+            throw new BackgroundNotApplicableException("Target resolution failed before input: " + error.Message);
         }
-        else if (op == "secondary")
+        return RunAction(op, mode, target, nodes, hwnd, request);
+    }
+
+    // Fenetres de premier niveau liees a la fenetre de reference : possedees (chaine des proprietaires) ou du meme
+    // processus. Le choix de suivre l'une d'elles revient a la session (apparue pendant l'action, ou possedee).
+    static readonly HashSet<string> IgnoredClasses = new(StringComparer.OrdinalIgnoreCase) { "tooltips_class32", "IME", "MSCTFIME UI", "SysShadow", "ForegroundStaging" };
+    static object Related(nint bound, uint boundPid)
+    {
+        var windows = new List<object>();
+        var z = 0;
+        Win32.EnumWindows((hwnd, _) =>
         {
-            var action = Text(request, "action");
-            if (!target.Actions.Contains(action)) throw new InvalidOperationException("Secondary action is not exposed");
-            var pattern = (ExpandCollapsePattern)target.Element.GetCurrentPattern(ExpandCollapsePattern.Pattern);
-            if (action == "Expand") pattern.Expand(); else pattern.Collapse();
-            mechanism = action;
-        }
-        else throw new InvalidOperationException("Unknown native operation");
-        return new { ok = true, mechanism };
+            z++;
+            if (hwnd == bound || !Win32.IsWindowVisible(hwnd)) return true;
+            var chain = new List<long>();
+            for (var owner = Win32.GetWindow(hwnd, Win32.GW_OWNER); owner != 0 && chain.Count < 16; owner = Win32.GetWindow(owner, Win32.GW_OWNER)) chain.Add(owner);
+            var pid = Win32.ProcessOf(hwnd);
+            if (pid != boundPid && !chain.Contains(bound)) return true;
+            var cls = Win32.ClassName(hwnd);
+            if (IgnoredClasses.Contains(cls) || !Win32.GetWindowRect(hwnd, out var rect) || rect.Empty) return true;
+            windows.Add(new { id = (long)hwnd, pid, ownerChain = chain, className = cls, title = Win32.Title(hwnd), enabled = Win32.IsWindowEnabled(hwnd), z });
+            return true;
+        }, 0);
+        return new { ok = true, boundEnabled = Win32.IsWindowEnabled(bound), windows };
+    }
+    static object ListWindows(int processId)
+    {
+        using var process = Process.GetProcessById(processId);
+        if (Excluded.Contains(process.ProcessName)) throw new InvalidOperationException("This application requires its dedicated supported tool");
+        var app = AppId(process);
+        var windows = new List<object>();
+        Win32.EnumWindows((hwnd, _) =>
+        {
+            if (Win32.IsWindowVisible(hwnd) && Win32.ProcessOf(hwnd) == processId && !IgnoredClasses.Contains(Win32.ClassName(hwnd)))
+                windows.Add(new { id = (long)hwnd, app, title = Win32.Title(hwnd) });
+            return true;
+        }, 0);
+        return new { ok = true, windows };
     }
     static void Write(object value) => Console.WriteLine(JsonSerializer.Serialize(value, Json));
     static string Clean(string value) => value.Replace('\r', ' ').Replace('\n', ' ');

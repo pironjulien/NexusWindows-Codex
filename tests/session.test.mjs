@@ -9,6 +9,31 @@ import { parseTree, uniqueElement, structureHash, checkExpectation, digest } fro
 
 const button = { automationId: 'go', role: 'button' };
 const expectDone = { selector: { automationId: 'status' }, field: 'value', equals: 'Done' };
+test('foreground contention prevents physical input and reports a deferred outcome', async t => {
+  const { session, sky, observation } = await setup(t, { native: {
+    async withForeground() { throw Object.assign(Error('Other agent holds foreground; action deferred'), { deferred: true }); },
+  } });
+  await assert.rejects(session.act(observation, { kind: 'click', selector: button }), /action deferred/);
+  assert.equal(sky.calls.length, 0);
+  assert.equal(session.metrics()[0].status, 'deferred');
+});
+
+test('foreground lease surrounds activation and input but not reads or background values', async t => {
+  let held = false, acquisitions = 0;
+  const { session, sky, observation } = await setup(t, { native: {
+    async withForeground(_, action) { acquisitions++; held = true; try { return await action(); } finally { held = false; } },
+  } });
+  assert.equal(acquisitions, 0);
+  sky.click = async () => { assert.equal(held, true); sky.done = true; };
+  await session.act(observation, { kind: 'click', selector: button });
+  assert.equal(held, false);
+  const obs = await session.observe();
+  await session.act(obs, { kind: 'setValue', selector: { automationId: 'input' }, value: 'background' });
+  assert.equal(acquisitions, 1);
+  sky.activate_window = async () => assert.equal(held, true);
+  await session.activate();
+  assert.equal(acquisitions, 2);
+});
 function provider() {
   return {
     target: 'windows', calls: [], index: 2, done: false, failInput: false, failRefresh: false,
@@ -38,7 +63,7 @@ async function setup(t, options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-cu-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const sky = provider();
-  const session = new WindowsSession(sky, { stateRoot: root, ...options });
+  const session = new WindowsSession(sky, { stateRoot: root, native: { withForeground: async (_, action) => action() }, ...options });
   await session.bind({ id: 10 });
   return { root, sky, session, observation: await session.observe() };
 }

@@ -1,5 +1,21 @@
 # Validation Computer Use Windows
 
+## Arrière-plan d'abord 1.3.0 — 15 octobre 2026
+
+**100 tests JavaScript (95 réussis, 5 réels sautés hors `-Full`), 28 Pester, 21 Python ; `test.ps1` code 0.** `test.ps1 -Full` : 14 tests réels jeton/arrêt d'urgence et la validation réelle `tests/live/background.live.mjs`, code 0.
+
+Validation réelle sur la fixture du test (WinForms, Win32 natif, WPF .NET 8), fenêtres affichées sans activation au fond de l'empilement, la Win32 recouverte par la WinForms. Chaque action : postcondition vérifiée, événement compté par l'application, premier plan inchangé, curseur immobile.
+
+| Action | Technique | Durée (entrée + relectures) |
+| --- | --- | --- |
+| Win32 bouton, case, saisie, ajout au curseur, liste déroulante, liste, menu | `BN_CLICKED`, `BM_SETCHECK+BN_CLICKED`, `EM_REPLACESEL`, `CB_SETCURSEL`, `LB_SETCURSEL`, `WM_COMMAND` | 105–159 ms |
+| WinForms saisie, liste déroulante, liste | messages | 292–338 ms |
+| WinForms case, bouton, dialogue ouvert puis fermé (suivi automatique) | UIA COM Toggle / Invoke | 205–441 ms |
+| WPF bouton, case, valeur | UIA COM Invoke / Toggle / Value | 193–241 ms |
+| Lot de 3 étapes, arrêt à l'étape 2 (3e jamais envoyée) | messages | 658 ms |
+| Capture de la fenêtre Win32 recouverte | PrintWindow, non vide | 19 ms |
+
+Avant correction, la même validation a échoué : Toggle/Invoke COM depuis le helper qui avait lu l'arbre par `System.Windows.Automation` activaient la fenêtre WinForms ou WPF. Reproduit hors helper (C# : vol dès que le client géré a servi ; comtypes ou C# COM pur : aucun vol), corrigé par le processus enfant `--com-worker`. Le repli qui prend le premier plan (UIA sous jeton) a été « sauté » : Julien était actif (moins de 120 s d'inactivité) ; il n'est pas compté réussi. Les entrées physiques Sky ne sont pas testables hors du REPL Codex ; leur orchestration (pause, jeton, tranches, interruption) est couverte par les tests hors ligne. Durées dominées par les relectures complètes de l'arbre UIA géré.
 ## Recontrôle 1.1.1 — 12 octobre 2026
 
 Revue des quatre modules JavaScript, du helper C#, du protocole, des recettes, de l'installateur, du skill et des tests. **59 tests JavaScript et 39 tests Pester réussis**, compilation .NET et contrôle de l'installation réussis. Treize nouvelles régressions échouaient avant correction ; deux autres tests vérifient le nettoyage après échec de publication et l'exclusion des écritures de recettes concurrentes. Les cinq nouveaux tests Pester couvrent les artefacts natifs et le verrou d'installation.
