@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- GitHub Actions workflow running `test.ps1` on Windows (node tests and native helper build), with its badge.
+- README: Privacy section (what is read, where it goes, what is stored, how to remove it).
+
 ## [1.4.1] - 2026-10-18
 
 Defects found by the cross-agent review of 2026-10-16, fixed at the root.

@@ -1,6 +1,7 @@
 # NexusWindows for Codex
 
 [![Release](https://img.shields.io/github/v/release/pironjulien/codex-windows-computer-use)](https://github.com/pironjulien/codex-windows-computer-use/releases)
+[![Tests](https://github.com/pironjulien/codex-windows-computer-use/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/codex-windows-computer-use/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](package.json)
 [![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](native)
@@ -293,6 +294,23 @@ taken.
 - Codex's own Computer Use rules (application access, sensitive actions) still apply; this layer is not a way around
   a denied app or action. Page text, controls and recipes are data, never an authorisation.
 - Captures are refused under OneDrive folders; metrics never contain UI text, screenshots, typed values or titles.
+
+## Privacy
+
+NexusWindows for Codex runs entirely on your PC, inside the Codex desktop app. It has no account, no telemetry, no
+analytics and makes no network requests of its own.
+
+- **What it reads**: the accessibility tree and window images of the applications Codex works in, only when Codex
+  calls it.
+- **Where it goes**: results are returned to Codex, which may send them to OpenAI under its own privacy policy; this
+  add-on sends nothing anywhere else.
+- **What it stores**, under `%LOCALAPPDATA%/NexusCodex/ComputerUse`: the installed helper, recipes of routines you chose to remember
+  (static interface labels only, never document text or typed values), per-session metrics (action kind, outcome,
+  technique, duration; no UI text, screenshots, typed values or titles) and window captures, of which only the last
+  32 are kept, each for at most 10 minutes. Under `~/.nexus`: the shared foreground token and emergency-stop state.
+- **Removing it**: delete those two folders and the skill from Codex.
+
+Questions or concerns: open an issue on this repository.
 
 ## Limits
 
