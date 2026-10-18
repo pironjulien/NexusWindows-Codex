@@ -8,8 +8,11 @@
 
 [![NexusWindows: Windows computer use for AI agents, in the background. Works with Claude, Codex and Antigravity.](docs/assets/banner.webp)](https://julienpiron.fr/nexuswindows/)
 
-**Windows computer use for Codex, in the background.** A Windows layer for the OpenAI Codex desktop app's
-**Computer Use** plugin. It keeps Codex's supported Computer Use API (`@oai/sky`) for window inventory, screenshots
+**Windows computer use for Codex, in the background.** An add-on to the OpenAI Codex desktop app's own
+**Computer Use** plugin, not a replacement. Codex's Computer Use came to macOS first; on Windows, OpenAI's
+documentation says to keep the target app visible on the active desktop while it runs
+([Codex docs](https://developers.openai.com/codex/app/computer-use)). This layer makes it act in the background
+first. It keeps Codex's supported Computer Use API (`@oai/sky`) for window inventory, screenshots
 and physical input, and adds a local .NET helper that acts **in the background first**: Win32 messages and UI
 Automation without focus, so the user keeps their mouse, keyboard and foreground window. Every action is checked
 against an explicit postcondition.
