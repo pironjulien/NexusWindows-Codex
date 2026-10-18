@@ -1,7 +1,7 @@
 # NexusWindows for Codex
 
-[![Release](https://img.shields.io/github/v/release/pironjulien/codex-windows-computer-use)](https://github.com/pironjulien/codex-windows-computer-use/releases)
-[![Tests](https://github.com/pironjulien/codex-windows-computer-use/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/codex-windows-computer-use/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/pironjulien/NexusWindows-Codex)](https://github.com/pironjulien/NexusWindows-Codex/releases)
+[![Tests](https://github.com/pironjulien/NexusWindows-Codex/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusWindows-Codex/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](package.json)
 [![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](native)
@@ -21,11 +21,11 @@ against an explicit postcondition.
 Version 1.5.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
-([Claude](https://github.com/pironjulien/claude-windows-computer-use) ·
-[Codex](https://github.com/pironjulien/codex-windows-computer-use) ·
-[Antigravity](https://github.com/pironjulien/antigravity-windows-computer-use)),
-[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/chrome-computer-use)),
-[NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/android-computer-use)).
+([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·
+[Codex](https://github.com/pironjulien/NexusWindows-Codex) ·
+[Antigravity](https://github.com/pironjulien/NexusWindows-Antigravity)),
+[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/NexusBrowser)),
+[NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/NexusAndroid)).
 Project page: [julienpiron.fr/nexuswindows](https://julienpiron.fr/nexuswindows/).
 
 ## Why
@@ -149,7 +149,7 @@ pixel is ever replayed, and typed content is never stored.
 ## Working alongside other agents
 
 This layer runs next to two other desktop agents on the same PC (a Claude MCP server,
-[NexusWindows for Claude](https://github.com/pironjulien/claude-windows-computer-use), and an Antigravity layer).
+[NexusWindows for Claude](https://github.com/pironjulien/NexusWindows-Claude), and an Antigravity layer).
 They coordinate through two file-based protocols that any agent can implement:
 
 **Foreground token** (`%USERPROFILE%\.nexus\foreground.lock`): held only while really using the mouse or the
@@ -207,8 +207,8 @@ Requirements: Windows 10 or 11, the Codex desktop app with its Computer Use plug
 the tests.
 
 ```powershell
-git clone https://github.com/pironjulien/codex-windows-computer-use.git
-cd codex-windows-computer-use
+git clone https://github.com/pironjulien/NexusWindows-Codex.git
+cd NexusWindows-Codex
 pwsh -NoProfile -File install.ps1             # build the helper, install the skill into %USERPROFILE%\.codex\skills\nexus-windows
 pwsh -NoProfile -File install.ps1 -CheckOnly  # verify the installation matches the sources
 ```
@@ -293,7 +293,7 @@ and .NET helper ran with a fake Sky that refuses and counts any physical input.
 | Agent | Morning | After fixes |
 |---|---|---|
 | This layer (1.3.0, then 1.4.0) | 16/20 | **19/20** |
-| [NexusWindows for Claude](https://github.com/pironjulien/claude-windows-computer-use) | 17/20 | **19/20** |
+| [NexusWindows for Claude](https://github.com/pironjulien/NexusWindows-Claude) | 17/20 | **19/20** |
 | Antigravity layer | 18/20 | **19/20** |
 
 What still keeps this layer from 20: the real path through Sky inside the Codex app was not measured in this bench

@@ -6,7 +6,7 @@ a credential prompt or the secure desktop, to type into a password field, to tak
 foreground outside the shared token and the user's pause, or to act during the emergency stop.
 
 Please report such issues privately through
-[GitHub private vulnerability reporting](https://github.com/pironjulien/codex-windows-computer-use/security/advisories/new),
+[GitHub private vulnerability reporting](https://github.com/pironjulien/NexusWindows-Codex/security/advisories/new),
 not in a public issue. Include the tool call, the application involved and what happened. You will get an answer
 within a few days.
 

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Repository renamed to `pironjulien/NexusWindows-Codex`; GitHub redirects the old address.
 - Shared guard-rail policy updated (nexus-shared 6d82bbb): erasing, resetting or formatting the whole device now
   needs confirmation too; "erase everything" counts only on a reset screen.
 
