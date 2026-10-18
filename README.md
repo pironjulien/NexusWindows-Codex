@@ -1,5 +1,6 @@
 # NexusWindows for Codex
 
+[![Release](https://img.shields.io/github/v/release/pironjulien/codex-windows-computer-use)](https://github.com/pironjulien/codex-windows-computer-use/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](package.json)
 [![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](native)
