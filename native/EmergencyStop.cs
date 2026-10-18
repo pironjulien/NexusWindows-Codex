@@ -4,7 +4,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 
-// Shared emergency stop (NexusHarness/shared/emergency-stop.md). A NEW version of `stop` (write time + content)
+// Shared emergency stop (shared protocol emergency-stop.md). A NEW version of `stop` (write time + content)
 // younger than HoldSeconds freezes every desktop action of this process for the remaining time. The stop is latched
 // in memory on a monotonic clock: deleting the file or moving the wall clock never lifts it; only time does.
 sealed class EmergencyStopException(string message) : InvalidOperationException(message);

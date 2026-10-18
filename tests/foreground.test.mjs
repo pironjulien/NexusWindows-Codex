@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -10,6 +11,9 @@ const executable = process.env.NEXUS_FOREGROUND_EXE;
 const python = process.env.NEXUS_FOREGROUND_PYTHON;
 const lockPath = path.join(os.homedir(), '.nexus', 'foreground.lock');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+// Shared Python implementation of the token, next to the repository in the author's layout (absent from a public clone).
+const shared = path.resolve(import.meta.dirname, '../../../shared');
+const hasSharedLock = existsSync(path.join(shared, 'foreground_lock.py'));
 
 test('real foreground lease excludes other processes, defers input and releases on failure', { skip: !executable, timeout: 20000 }, async () => {
   const first = new NativeUIA(executable), second = new NativeUIA(executable);
@@ -44,8 +48,7 @@ test('real foreground lease waits for the holder and releases when its pipe clos
   }
 });
 
-test('C# lease interoperates with the shared Python LockFileEx implementation', { skip: !executable || !python, timeout: 12000 }, async () => {
-  const shared = path.resolve(import.meta.dirname, '../../../shared');
+test('C# lease interoperates with the shared Python LockFileEx implementation', { skip: !executable || !python || !hasSharedLock, timeout: 12000 }, async () => {
   const code = 'import sys; sys.path.insert(0, sys.argv[1]); from foreground_lock import ForegroundLock; lock = ForegroundLock("InteropPython", timeout=0, purpose="interop test"); ok = lock.acquire(); print(ok, flush=True); sys.stdin.readline(); lock.release()';
   const probe = () => spawn(python, ['-B', '-c', code, shared], { windowsHide: true });
   const ready = child => new Promise((resolve, reject) => {
