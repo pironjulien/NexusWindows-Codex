@@ -21,7 +21,7 @@ unsafe sealed class ComUia
     public const int InvokePatternId = 10000, SelectionPatternId = 10001, ValuePatternId = 10002, ExpandCollapsePatternId = 10005,
         SelectionItemPatternId = 10010, TextPatternId = 10014, TogglePatternId = 10015;
     const int RuntimeIdProperty = 30000, BoundingRectangleProperty = 30001, ProcessIdProperty = 30002, ControlTypeProperty = 30003,
-        NameProperty = 30005, HasKeyboardFocusProperty = 30008, IsEnabledProperty = 30010, AutomationIdProperty = 30011,
+        NameProperty = 30005, AccessKeyProperty = 30007, HasKeyboardFocusProperty = 30008, LegacyIAccessibleStateProperty = 30096, IsEnabledProperty = 30010, AutomationIdProperty = 30011,
         HelpTextProperty = 30013, IsPasswordProperty = 30019, NativeWindowHandleProperty = 30020, IsOffscreenProperty = 30022, FrameworkIdProperty = 30024,
         IsExpandCollapseAvailable = 30028, IsInvokeAvailable = 30031, IsSelectionItemAvailable = 30036, IsSelectionAvailable = 30037,
         IsTextAvailable = 30040, IsToggleAvailable = 30041, IsValueAvailable = 30043, ValueValueProperty = 30045,
@@ -32,6 +32,7 @@ unsafe sealed class ComUia
         IsEnabledProperty, AutomationIdProperty, HelpTextProperty, IsPasswordProperty, NativeWindowHandleProperty, IsOffscreenProperty, FrameworkIdProperty,
         IsExpandCollapseAvailable, IsInvokeAvailable, IsSelectionItemAvailable, IsSelectionAvailable, IsTextAvailable, IsToggleAvailable,
         IsValueAvailable, ValueValueProperty, ExpandCollapseStateProperty, SelectionItemIsSelectedProperty, ToggleStateProperty,
+        AccessKeyProperty, LegacyIAccessibleStateProperty, // garde-fous : raccourci Alt et bouton par defaut (STATE_SYSTEM_DEFAULT)
     ];
     const int TreeScopeElement = 1, TreeScopeChildren = 2, TreeScopeSubtree = 7;
     const ushort VT_I4 = 3, VT_R8 = 5, VT_BSTR = 8, VT_BOOL = 11, VT_ARRAY = 0x2000;
@@ -402,6 +403,7 @@ unsafe sealed class ComUia
             Checked = check, NativeWindow = nativeWindow, FrameworkId = framework, ProcessId = CachedInt(element, ProcessIdProperty) ?? 0,
             HasInvoke = CachedBool(element, IsInvokeAvailable) == true, HasToggle = CachedBool(element, IsToggleAvailable) == true,
             HasText = hasText, Bounds = Bounds(element), Offscreen = CachedBool(element, IsOffscreenProperty) == true,
+            AccessKey = CachedString(element, AccessKeyProperty) ?? "", IsDefault = ((CachedInt(element, LegacyIAccessibleStateProperty) ?? 0) & 0x100) != 0,
         };
         if (CachedBool(element, IsExpandCollapseAvailable) == true)
         {
@@ -614,7 +616,8 @@ sealed class Node
     public string FrameworkId = "";
     public string? Value;
     // Offscreen : UIA IsOffscreen (defile hors de la partie visible, fenetre reduite...), signale a la session.
-    public bool Disabled, Focused, Password, ValueTruncated, HasInvoke, HasToggle, HasText, Offscreen;
+    public bool Disabled, Focused, Password, ValueTruncated, HasInvoke, HasToggle, HasText, Offscreen, IsDefault;
+    public string AccessKey = "";
     public bool? Selected, Checked, Expanded;
     public nint NativeWindow;
     public required int[] RuntimeId, Ancestors;

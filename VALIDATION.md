@@ -1,5 +1,25 @@
 # Validation Computer Use Windows
 
+## Garde-fous communs 1.5.0 — 18 octobre 2026
+
+**128 tests JavaScript (123 réussis, 5 réels sautés hors `-Full`), 8 Pester Computer Use ; validation réelle `tests/live` 15 sous-tests réussis, 1 sauté** (le repli qui prend le premier plan : Julien actif), 0 échantillon de premier plan sur une fenêtre de test (279 échantillons), aucune entrée physique tentée.
+
+Politique commune `garde-fous.json` (entrée `codex`) lue par la session et par le helper natif ; copie embarquée identique (test JS et Pester). Consoles libres ; blocage dur réel vérifié : un fichier de politique qui bloque `powershell.exe` fait refuser le formulaire du banc (lecture, action, inventaire vide), un fichier absent fait tout refuser.
+
+Confirmation étanche sur la fixture réelle, bouton « Envoyer » de chaque famille, compteur de l'application à 0 avant la confirmation et à 1 après :
+
+| Geste sans `confirm` | WinForms (.NET 8) | Win32 | WPF |
+| --- | --- | --- | --- |
+| clic par sélecteur | refusé | refusé | refusé |
+| clic en coordonnées sur le bouton | refusé | refusé | refusé |
+| Entrée, Ctrl+Entrée | refusés | refusés | refusés |
+| Alt+E | refusé (AccessKey `Alt+e`) | refusé (AccessKey `Alt+e`) | refusé (lettre soulignée de `_Envoyer`) |
+| saut de ligne tapé dans le champ | refusé | refusé | refusé |
+| commande de menu « Fichier > Envoyer » | — | refusée | — |
+| clic confirmé (`confirm:true`) | 1 envoi, UIA Invoke, 77 ms | 1 envoi, `BN_CLICKED`, 74 ms | 1 envoi, UIA Invoke, 133 ms |
+
+Trois trous trouvés par ce test réel, corrigés avant livraison : WinForms n'expose son bouton par défaut (`AcceptButton`) que fenêtre active ; WPF expose son bouton par défaut par l'AccessKey « retour chariot » et cache alors Alt+E (seul le texte `_Envoyer` le porte). Règle retenue : sans focus connu, Entrée et Espace sont jugés sur tous les boutons d'action de la fenêtre ; l'AccessKey « Entrée » compte comme bouton par défaut ; la lettre soulignée d'un libellé compte comme raccourci. Les durées des autres actions sont inchangées (59–150 ms par action Win32/WinForms, lot du banc WinForms 957 ms, WPF 2,1 s) malgré deux propriétés UIA de plus dans le cache. Les entrées physiques Sky ne sont pas testables hors du REPL Codex : leur refus est vérifié avant l'entrée, par le même code.
+
 ## Banc réel corrigé 1.4.0 — 16 octobre 2026
 
 **108 tests JavaScript (103 réussis, 5 réels sautés hors `-Full`), 28 Pester, 21 Python ; `test.ps1` et `test.ps1 -Full` code 0** (14 tests réels jeton/arrêt d'urgence, validation réelle 14 sous-tests réussis, le repli qui prend le premier plan « sauté » : Julien actif).

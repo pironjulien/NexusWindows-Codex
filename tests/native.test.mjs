@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { NativeUIA } from '../lib/native.mjs';
+import { policyPath } from '../lib/garde-fous.mjs';
 
 const window = { id: 1, app: 'transport-fixture' };
 function worker(t, options = {}) {
@@ -66,4 +67,8 @@ test('oversized requests and invalid timeouts are refused before a worker action
   const native = worker(t);
   await assert.rejects(native.call(window, 'inspect', { value: 'x'.repeat(262145) }), /too large/);
   assert.equal((await native.inspect(window)).count, 1);
+});
+test('the helper receives the shared garde-fous policy path (it refuses every window request without it)', async t => {
+  const native = worker(t);
+  assert.equal((await native.inspect(window)).policy, policyPath());
 });

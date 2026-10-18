@@ -7,12 +7,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { WindowsSession } from '../../lib/session.mjs';
 import { NativeUIA } from '../../lib/native.mjs';
 import { EmergencyStop } from '../../lib/stop.mjs';
 import { startBenchForm } from './bench-forms.mjs';
+import { EMBEDDED_POLICY } from '../../lib/garde-fous.mjs';
 
 const executable = process.env.NEXUS_LIVE_EXE;
 const fixture = process.env.NEXUS_LIVE_FIXTURE;
@@ -20,10 +22,11 @@ const reports = process.env.NEXUS_LIVE_REPORTS;
 const IDLE_REQUIRED_MS = 120000;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-// Fournisseur « Sky » de laboratoire : inventaire et identité des fenêtres de la fixture par le helper, aucun arbre ni
-// image (la session passe donc par UIA natif) et AUCUNE entrée physique : toute tentative est comptée et échoue.
+// Fournisseur « Sky » de laboratoire : inventaire et identité des fenêtres de la fixture par le helper, aucun arbre (la
+// session passe donc par UIA natif), une capture seulement décrite (`shot` : rectangle de la fenêtre, pour viser en
+// coordonnées) et AUCUNE entrée physique : toute tentative est comptée et échoue.
 class LabSky {
-  target = 'windows'; physical = [];
+  target = 'windows'; physical = []; shot = null;
   constructor(native, pid) { this.native = native; this.pids = [pid]; }
   async list_windows() {
     const all = [];
@@ -35,7 +38,7 @@ class LabSky {
     if (!found) throw new Error('Window is gone');
     return found;
   }
-  async get_window_state({ window }) { return { window, accessibility: null, screenshots: [] }; }
+  async get_window_state({ window, include_screenshot }) { return { window, accessibility: null, screenshots: include_screenshot && this.shot ? [this.shot] : [] }; }
   #refuse(kind) { this.physical.push(kind); throw new Error('Physical Sky input is not available in the live laboratory'); }
   async click() { this.#refuse('click'); }
   async type_text() { this.#refuse('type_text'); }
@@ -283,13 +286,66 @@ test('live background validation on self-created covered windows', { skip: !exec
     await t.test('bench WinForms hosted by powershell.exe: open the list, choose Bravo, validate (Formule=Bravo, Envois=1)', () => bench('Banc WinForms', winformsBench, 'winforms'));
     await t.test('bench WPF hosted by powershell.exe: choose directly, open the list, choose Bravo, validate (Formule=Bravo, Envois=1)', () => bench('Banc WPF', wpfBench, 'wpf'));
 
-    await t.test('a console window is refused while a GUI window of the same powershell.exe is allowed', async () => {
+    await t.test('garde-fous: a console window is free; a policy-blocked app and a missing policy are refused by the helper', async () => {
       const listed = (await labNative.listWindows(winformsBench.pid)).windows;
       assert.ok(listed.some(w => w.id === winformsBench.hwnd));
-      assert.equal(listed.some(w => w.id === winformsBench.console), false);
-      const fake = { id: winformsBench.console, app: listed[0].app };
-      await assert.rejects(labNative.inspect(fake), /Console and terminal windows/);
-      await assert.rejects(sessionNative.call(fake, 'click', { selector: { name: 'x' }, mode: 'background' }), error => error.refused === true && /Console and terminal/.test(error.message));
+      assert.ok(listed.some(w => w.id === winformsBench.console)); // libre depuis l'accord du 18/10
+      const app = listed[0].app;
+      assert.equal((await labNative.inspect({ id: winformsBench.console, app })).ok, true);
+      // Vrai fichier de politique lu par le helper : powershell.exe ajouté à l'application de Codex lui-même → refus.
+      const policy = JSON.parse(readFileSync(EMBEDDED_POLICY, 'utf8'));
+      policy.blocage_dur.fenetre_autorisation_codex.processus.push('powershell.exe');
+      const blockedFile = path.join(work, 'garde-fous-bloque.json');
+      await writeFile(blockedFile, JSON.stringify(policy));
+      const withPolicy = async (file, fn) => {
+        const saved = process.env.NEXUS_GARDE_FOUS;
+        process.env.NEXUS_GARDE_FOUS = file;
+        const native = new NativeUIA(executable);
+        try { return await fn(native); }
+        finally { native.close(); if (saved === undefined) delete process.env.NEXUS_GARDE_FOUS; else process.env.NEXUS_GARDE_FOUS = saved; }
+      };
+      await withPolicy(blockedFile, async native => {
+        await assert.rejects(native.inspect({ id: winformsBench.hwnd, app }), /shared garde-fous policy: application de Codex/);
+        await assert.rejects(native.call({ id: winformsBench.hwnd, app }, 'click', { selector: { name: 'Valider' }, mode: 'background' }), error => error.refused === true);
+        assert.equal((await native.listWindows(winformsBench.pid)).windows.length, 0);
+      });
+      await withPolicy(path.join(work, 'absente.json'), async native => {
+        await assert.rejects(native.inspect({ id: winformsBench.hwnd, app }), /policy unreadable.*fail closed/);
+      });
+    });
+
+    // Confirmation étanche : « Envoyer » exige confirm:true, quel que soit le geste (clic par sélecteur ou en
+    // coordonnées, Entrée vers le bouton par défaut, Ctrl+Entrée, Alt+E, saut de ligne tapé, menu) ; rien n'est envoyé
+    // (compteurs de l'application intacts). Avec confirm:true, un seul envoi, en arrière-plan.
+    await t.test('garde-fous: sending needs confirm whatever the gesture; confirm:true sends exactly once', async () => {
+      const refusedHere = what => error => error.confirmationRequired === true || assert.fail(`${what}: ${error.message}`);
+      for (const [id, family, send, counter, field, statusId] of [
+        [ready.winforms, 'WinForms', { automationId: 'envoyer' }, 'winforms.sends', { automationId: 'nom', role: 'edit' }, 'etat'],
+        [ready.win32, 'Win32', { name: 'Envoyer', role: 'button' }, 'win32.sends', { automationId: '103', role: 'edit' }, '106'],
+        [ready.wpf, 'WPF', { automationId: 'envoyer-wpf' }, 'wpf.sends', { automationId: 'editeur' }, 'etat-wpf'],
+      ]) {
+        await session.bind({ id });
+        await assert.rejects(session.act(await session.observe(), { kind: 'click', selector: send }), refusedHere(`${family} click`));
+        for (const key of ['Return', 'ctrl+Return', 'alt+e']) {
+          await assert.rejects(session.act(await session.observe(), { kind: 'key', key }), refusedHere(`${family} ${key}`));
+        }
+        await assert.rejects(session.act(await session.observe(), { kind: 'typeText', focus: field, text: 'x\n' }), refusedHere(`${family} newline`));
+        let obs = await session.observe();
+        const [rx, ry, rw, rh] = obs.elements[0].bounds;
+        const [bx, by, bw, bh] = obs.elements.find(e => Object.entries(send).every(([k, v]) => e[k] === v)).bounds;
+        sky.shot = { id: `lab-${id}`, width: rw, height: rh, originX: rx, originY: ry };
+        obs = await session.observe({ mode: 'both' });
+        await assert.rejects(session.act(obs, { kind: 'click', screenshotId: sky.shot.id, point: { x: bx + bw / 2 - rx, y: by + bh / 2 - ry } }), refusedHere(`${family} coordinates`));
+        sky.shot = null;
+        assert.equal((await state())[counter], undefined, `${family}: nothing sent before confirm`);
+        await background(`${family} send confirmed`, await session.observe(), { kind: 'click', selector: send, confirm: true, expect: text(statusId, 'Envoyé 1') });
+        assert.equal((await state())[counter], 1);
+      }
+      await session.bind({ id: ready.win32 });
+      await assert.rejects(session.act(await session.observe(), { kind: 'menu', path: 'Fichier > Envoyer' }), refusedHere('Win32 menu'));
+      assert.equal((await state())['win32.menuSends'], undefined);
+      await background('Win32 menu send confirmed', await session.observe(), { kind: 'menu', path: 'Fichier > Envoyer', confirm: true, expect: text('106', 'Menu envoyé 1') }, { technique: /^background:messages$/ });
+      assert.equal((await state())['win32.menuSends'], 1);
     });
 
     await t.test('no fixture window ever took the foreground during the background scenarios', async () => {

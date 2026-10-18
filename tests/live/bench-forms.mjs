@@ -3,7 +3,7 @@
 // liste déroulante « Formule » (Alpha, Bravo, Charlie) ; bouton « Valider » qui écrit dans l'étiquette « resultat » ce
 // que l'APPLICATION a reçu, avec le nombre d'envois. Affichés SANS activation, au fond de l'empilement, fermés à la fin
 // de leur entrée standard (ou au bout de 300 s). Le processus WinForms crée aussi une fenêtre de classe
-// « ConsoleWindowClass » (fausse console) : elle doit être refusée alors que le formulaire du même processus est permis.
+// « ConsoleWindowClass » (fausse console) : libre depuis l'accord « garde-fous » du 18/10, comme le formulaire.
 import { spawn } from 'node:child_process';
 
 const WINFORMS = String.raw`

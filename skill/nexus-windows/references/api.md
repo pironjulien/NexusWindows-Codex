@@ -12,7 +12,7 @@ Use `createWindowsSession(sky)` from the installed `entry.mjs`. It sets the cano
 - Add `backend:'native'` to inspect controls missing from a nonempty Sky tree, or `backend:'sky'` to return to Sky. The default `auto` retains the selected provider. Inspect the new observation before acting; provider changes never silently retarget an action.
 - `activate()` restores/activates the bound window and returns a new combined observation. It is a foreground action: Julien's pause, shared token, his window given back if the target still holds the foreground.
 - Native elements carry `expanded` (`true`/`false`, `null` without an ExpandCollapse state). A combo box's `value` is its chosen option: Value pattern, else the Selection pattern (WPF), else `CB_GETCURSEL` for Win32/WinForms. The options of a Win32/WinForms combo box are read by messages, list open or closed, as `list` and `listitem` children (runtime identity `[-1, window, kind, rank]`); a click on such an option chooses it by its rank.
-- Console and terminal windows (classes `ConsoleWindowClass`, `PseudoConsoleWindow`, `CASCADIA_HOSTING_WINDOW_CLASS`) are refused whatever process they are attributed to, as are Windows Terminal, conhost, OpenConsole and PowerShell ISE. A WinForms or WPF window hosted by `powershell.exe` is an ordinary application window.
+- Hard block from the shared policy `garde-fous.json` (entry `codex`): secure desktop (UAC, lock, sign-in), Windows credential prompts, password managers, Codex's own app (Codex, ChatGPT). Refused before any read (`refused`); a missing or invalid policy refuses everything. Console and terminal windows, Explorer and administration tools are free.
 - `close()` invalidates the session and closes its native worker. It does not close the application.
 - `summarize(obs)` emits tree, focus, source and screenshot metadata without duplicating image payloads.
 
@@ -47,13 +47,13 @@ Semantic `click` (one left click), `setValue`, `typeText`, `secondary` (Expand/C
 
 Options match exactly (whitespace-normalised), then case-insensitively; never partially; duplicates are refused. Menu paths match the full path, else a unique suffix; a disabled command or a disabled window (modal dialog) is refused. The command state is read after `WM_INITMENU` and `WM_INITMENUPOPUP` are sent to the owner (as a real opening does); without an answer, or if the menu changed meanwhile, the state is not verifiable and nothing is posted.
 
-The helper re-reads the effect: `applied`, `none` or `sent`. **Physical fallback** (Sky under the foreground token, after Julien's pause) only when no background technique applies, or when `expect` is unmet and the helper read back `none`. After `sent` with an unmet `expect` and an identical values/states digest (no window change), the status is `sent-unconfirmed` (attempt outcome `effect-not-read`): never verified, never repeated, since a slow effect would be doubled. A changed state with an unmet `expect` stays `unmet`, never repeated. `fallback:false` disables the physical path. `select` and `menu` have no physical path; a native observation's physical path for a semantic click is UIA under the token (`foreground:uia`: Invoke, or SetFocus on an editable surface), and it has no physical `setValue`/`secondary`. Errors with `refused:true` (password, excluded application, changed identity, window closed during the request, off-screen target with no visible part, disabled target or window) or `beforeInput:true` sent nothing and are never retried. A click whose target has the `offscreen` flag (UIA `IsOffscreen`) and no part inside its window is refused before input.
+The helper re-reads the effect: `applied`, `none` or `sent`. **Physical fallback** (Sky under the foreground token, after Julien's pause) only when no background technique applies, or when `expect` is unmet and the helper read back `none`. After `sent` with an unmet `expect` and an identical values/states digest (no window change), the status is `sent-unconfirmed` (attempt outcome `effect-not-read`): never verified, never repeated, since a slow effect would be doubled. A changed state with an unmet `expect` stays `unmet`, never repeated. `fallback:false` disables the physical path. `select` and `menu` have no physical path; a native observation's physical path for a semantic click is UIA under the token (`foreground:uia`: Invoke, or SetFocus on an editable surface), and it has no physical `setValue`/`secondary`. Errors with `refused:true` (password, hard-blocked application, missing confirmation (`confirmationRequired:true`), changed identity, window closed during the request, off-screen target with no visible part, disabled target or window) or `beforeInput:true` sent nothing and are never retried. A click whose target has the `offscreen` flag (UIA `IsOffscreen`) and no part inside its window is refused before input.
 
 Physical `typeText` is sent one grapheme at a time; the emergency stop is checked before each. If Julien presses the stop, types or uses the mouse, the rest is not sent: `status:'interrupted'`, `interrupted:'julien'|'emergency-stop'`, `typed:{chunks,total}`, `verified:false`.
 
 Request fields are specific to each action. Unrelated fields are rejected, and a coordinate point may contain only finite `x` and `y`. In particular, `typeText` cannot accept screenshot coordinates as an alternative to its focus check.
 
-Focus an observed editable surface and inspect the refresh before `typeText`. The function checks fresh keyboard focus and the original field's identity and ancestor context. Native runtime IDs must remain unchanged, even when labels match. `setValue` only uses a writable ValuePattern; an unsupported operation is reported, never silently redirected to keyboard input. Password controls are refused. Literal newlines stay text; submission is a distinct, authorized key action.
+Focus an observed editable surface and inspect the refresh before `typeText`. The function checks fresh keyboard focus and the original field's identity and ancestor context. Native runtime IDs must remain unchanged, even when labels match. `setValue` only uses a writable ValuePattern; an unsupported operation is reported, never silently redirected to keyboard input. Password controls are refused. A line break in `typeText` is judged like Enter by the confirmation check (see below).
 
 Append an explicit `expect` to verify the result. It must describe the **effect** of the action:
 
@@ -90,7 +90,7 @@ globalThis.batch = await win.actBatch(obs, [
 globalThis.obs = batch.observation; // null after an unknown outcome: observe again
 ```
 
-1 to 32 steps, each with an `expect`; all steps are validated before any input. Each step uses the observation refreshed by the previous step; an observation younger than 162 ms (the previous step's) is not read a second time before input, the helper re-reading the target and its ancestors at input time anyway. The batch returns `{status:'completed'|'stopped', stoppedAt?, completed, steps:[{index, kind, status, verified, performed, technique, foregroundTaken, julienInput, windowChange, durationMs, error?}], observation}` and stops at the first step that is not `verified`/`already-satisfied`, or is `unknown`, `deferred`, `julien-active`, `refused` or interrupted. An emergency stop is rethrown with `error.batch`.
+1 to 32 steps, each with an `expect`; all steps are validated before any input. Each step uses the observation refreshed by the previous step; an observation younger than 162 ms (the previous step's) is not read a second time before input, the helper re-reading the target and its ancestors at input time anyway. The batch returns `{status:'completed'|'stopped', stoppedAt?, completed, steps:[{index, kind, status, verified, performed, technique, foregroundTaken, julienInput, windowChange, durationMs, error?}], observation}` and stops at the first step that is not `verified`/`already-satisfied`, or is `unknown`, `deferred`, `julien-active`, `confirmation-required`, `refused` or interrupted. An emergency stop is rethrown with `error.batch`.
 
 ### Julien's presence
 
@@ -128,3 +128,22 @@ The session reads `%USERPROFILE%/.nexus/stop` (shared protocol `emergency-stop.m
 - Incomplete Sky tree: `observe({backend:'native'})`, inspect and use only controls in that new observation. UIA failure: inspect a Sky screenshot; do not force a semantic success or bypass an app restriction.
 - SDK image shows another window: retarget/activate and observe. Independent assistants are not controlled by this module's in-process operation lock.
 - Codex or another agent: official chat tools with the user's authorization to message, not private protocols or replayed session tokens.
+
+## Confirmation (`confirm`)
+
+Every action accepts `confirm:true|false` (boolean). Without `confirm:true`, a gesture whose trigger carries a word of the shared policy (pay, buy, order, transfer money, send, publish, post, delete permanently, empty the trash, uninstall, format a disk, reset, cancel a subscription, delete an account or data, make a repository public; or Validate/OK/Start in a payment or formatting window) is refused before input with `error.confirmationRequired`, `refused` and `beforeInput` (metric and batch status `confirmation-required`). What is judged:
+
+| Gesture | Trigger judged |
+| --- | --- |
+| `click` (left, single or double) by selector | the button, link or menu item carrying the target (a text or icon inside a button counts as the button); non-action roles (list or tree item, tab, field, combo box, check box…) and submenu items are free |
+| `click` by coordinates | the deepest element under the point in a fresh native tree, then as above |
+| `key` Enter | focused element, default button (UIA legacy state, or WPF access key Enter), action buttons next to the focused field (up to 3 ancestors) |
+| `key` Ctrl+Enter | every action button of the window |
+| `key` Space | focused element |
+| `key` Alt+letter | action with that access key, or a label with that underlined letter (`_Send`, `&Send`) |
+| Enter or Space with no known focus | every action button of the window (focus unknown until activation) |
+| `typeText` with a line break | as Enter in that field |
+| `menu` | the last item of the path |
+| `secondary` | the target, except Expand, Collapse, Toggle, Select, scrolling |
+
+Right and middle clicks, scrolls and drags are free. `runRecipe(obs, name, {confirm:true})` passes the confirmation to a learned action.

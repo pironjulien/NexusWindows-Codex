@@ -5,11 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.5.0] - 2026-10-18 — One shared guardrail policy
+
+The same policy as NexusWindows for Claude and for Antigravity (`garde-fous.json`, with a `codex` entry).
 
 ### Added
+- **Confirmation of irreversible gestures**: paying, calling, sending, publishing, deleting permanently, formatting,
+  uninstalling, resetting, cancelling a subscription and making a repository public need `confirm:true`, set only on
+  the user's explicit order. The check is on what the gesture triggers: click by selector or by coordinates, Enter,
+  Ctrl+Enter, Space, Alt+letter, typed line break, menu command, secondary action. Refused before any input, status
+  `confirmation-required` in a batch; a learned recipe is never an order.
+- Embedded copy of the policy (`garde-fous.json`), checked byte-identical to the shared file in the author's
+  workspace; `NEXUS_GARDE_FOUS` points to another file.
+- Real validation: every gesture refused and exactly one send after confirmation, on WinForms, Win32 and WPF; hard
+  block and fail-closed helper with a real policy file.
 - GitHub Actions workflow running `test.ps1` on Windows (node tests and native helper build), with its badge.
 - README: Privacy section (what is read, where it goes, what is stored, how to remove it).
+
+### Changed
+- **Hard block read from the shared policy** instead of a built-in list: the secure desktop, Windows credential
+  prompts, password managers (Dashlane, NordPass, RoboForm and LastPass added) and Codex's own application. Missing or
+  invalid policy: everything is refused.
+- The helper exposes the access key and the "default button" state of controls.
+
+### Removed
+- Refusals the shared policy made free: terminals, consoles (by process and by window class), Windows Security.
 
 ## [1.4.1] - 2026-10-18
 

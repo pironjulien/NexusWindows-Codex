@@ -77,6 +77,10 @@ static class Program
         fruits.Items.AddRange(["Pomme", "Poire", "Prune"]);
         var openDialog = new Forms.Button { Name = "dialogue", Text = "Dialogue", Left = 240, Top = 80, Width = 140 };
         var status = new Forms.Label { Name = "etat", Text = "Prêt", Left = 16, Top = 236, Width = 400 };
+        // Garde-fous : bouton d'envoi (raccourci Alt+E, bouton par defaut du formulaire), a confirmer.
+        var send = new Forms.Button { Name = "envoyer", Text = "&Envoyer", Left = 330, Top = 14, Width = 140 };
+        send.Click += (_, _) => status.Text = "Envoyé " + Count("winforms.sends");
+        form.AcceptButton = send;
         name.TextChanged += (_, _) => { Count("winforms.textChanged"); Record("winforms.text", name.Text); };
         option.CheckedChanged += (_, _) => { Count("winforms.checkChanged"); Record("winforms.checked", option.Checked); status.Text = "Option " + (option.Checked ? "oui" : "non"); };
         save.Click += (_, _) => status.Text = "Enregistré " + Count("winforms.saves");
@@ -92,7 +96,7 @@ static class Program
             dialog.Shown += (_, _) => Record("winforms.dialog", dialog.Handle.ToInt64());
             dialog.Show(form);
         };
-        form.Controls.AddRange([name, option, save, color, fruits, openDialog, status]);
+        form.Controls.AddRange([name, option, save, color, fruits, openDialog, status, send]);
 
         // --- Win32 natif (meme fil, meme boucle de messages) ---
         nint win32 = 0;
@@ -113,12 +117,15 @@ static class Program
             var button = new WpfControls.Button { Content = "Valider WPF" };
             WpfAutomation.AutomationProperties.SetAutomationId(button, "valider-wpf");
             var text = new WpfControls.TextBlock { Text = "Prêt" };
+            var send = new WpfControls.Button { Content = "_Envoyer", IsDefault = true };
+            WpfAutomation.AutomationProperties.SetAutomationId(send, "envoyer-wpf");
+            send.Click += (_, _) => text.Text = "Envoyé " + Count("wpf.sends");
             WpfAutomation.AutomationProperties.SetAutomationId(text, "etat-wpf");
             editor.TextChanged += (_, _) => { Count("wpf.textChanged"); Record("wpf.text", editor.Text); };
             check.Checked += (_, _) => { Count("wpf.checked"); text.Text = "Coché"; };
             check.Unchecked += (_, _) => { Count("wpf.unchecked"); text.Text = "Décoché"; };
             button.Click += (_, _) => text.Text = "Validé " + Count("wpf.clicks");
-            foreach (var element in new Wpf.UIElement[] { editor, check, button, text }) panel.Children.Add(element);
+            foreach (var element in new Wpf.UIElement[] { editor, check, button, text, send }) panel.Children.Add(element);
             window.Content = panel;
             window.SourceInitialized += (_, _) => { wpf = new Wpf.Interop.WindowInteropHelper(window).Handle; };
             window.Show();
@@ -170,10 +177,12 @@ static class Program
         win32List = Child("LISTBOX", null, 0x1 /* LBS_NOTIFY */ | WS_BORDER | WS_VSCROLL, 16, 150, 200, 70, 105);
         foreach (var item in new[] { "Un", "Deux", "Trois" }) SendMessageW(win32List, 0x0180 /* LB_ADDSTRING */, 0, item);
         win32Status = Child("STATIC", "Prêt", 0, 16, 236, 400, 24, 106);
+        Child("BUTTON", "&Envoyer", 0x1 /* BS_DEFPUSHBUTTON */, 330, 84, 120, 28, 107);
         var menu = CreateMenu();
         var file = CreateMenu();
         AppendMenuW(file, 0, 201, "&Compter\tCtrl+K");
         AppendMenuW(file, 0x1 /* MF_GRAYED */, 202, "&Désactivé");
+        AppendMenuW(file, 0, 203, "En&voyer");
         AppendMenuW(menu, 0x10 /* MF_POPUP */, (nuint)file, "&Fichier");
         SetMenu(top, menu);
         ShowWindow(top, 4 /* SW_SHOWNOACTIVATE */);
@@ -223,6 +232,8 @@ static class Program
                 }
                 case 201 when lparam == 0: SetWindowTextW(win32Status, "Compter " + Count("win32.menu")); break;
                 case 202 when lparam == 0: Count("win32.disabledMenu"); break;
+                case 107 when code == 0: SetWindowTextW(win32Status, "Envoyé " + Count("win32.sends")); break;
+                case 203 when lparam == 0: SetWindowTextW(win32Status, "Menu envoyé " + Count("win32.menuSends")); break;
             }
         }
         return DefWindowProcW(hwnd, msg, wparam, lparam);

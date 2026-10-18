@@ -18,7 +18,7 @@ and physical input, and adds a local .NET helper that acts **in the background f
 Automation without focus, so the user keeps their mouse, keyboard and foreground window. Every action is checked
 against an explicit postcondition.
 
-Version 1.4.1 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+Version 1.5.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/claude-windows-computer-use) ·
@@ -106,13 +106,30 @@ Transient popups (caption-less `WS_POPUP` windows with `WS_EX_NOACTIVATE`: an op
 popup; or a Win32 `ComboLBox`) are never followed: they are read through the window's own tree and listed in
 `obs.popups`.
 
-### Excluded windows
+### Guardrails: one shared policy
 
-Refused before any input: the agent's own application, terminals and console hosts, security and sign-in screens,
-password managers, and **every console or terminal window by its class** (`ConsoleWindowClass`,
-`PseudoConsoleWindow`, `CASCADIA_HOSTING_WINDOW_CLASS`), whatever process Windows attributes it to. A graphical
-window (WinForms, WPF) hosted by `powershell.exe` is not a console and is allowed; until 1.3.0 the whole
-`cmd`/`powershell`/`pwsh` process was refused, which also hid such forms.
+Since 1.5.0 the guardrails come from the policy shared by the three NexusWindows editions (Codex, Claude,
+Antigravity), `garde-fous.json`, with a `codex` entry. A copy is embedded at the root of this repository; inside the
+author's private workspace the live shared file is read instead (a test checks both are byte-identical).
+`NEXUS_GARDE_FOUS` can point to another file; an imposed path is never silently replaced. A missing or invalid policy
+refuses every action (fail closed), and the .NET helper refuses every window request without a readable policy.
+
+**Hard block** (refused before any read or input): the secure desktop (UAC, lock screen, sign-in), Windows credential
+prompts, password managers (KeePass, Bitwarden, 1Password, Dashlane, NordPass, RoboForm, LastPass, by process
+prefix), and Codex's own application (Codex, ChatGPT), because Codex Computer Use asks for app access inside its
+main window. Consoles and terminals, File Explorer and administration tools are no longer refused (they were until
+1.4.1): the layer is meant for a user who already lets Codex run commands. Password fields stay refused everywhere,
+and their value is never read.
+
+**Confirmation** (`confirm:true` on the action, set only on the user's explicit order or after their yes): paying,
+calling, sending, publishing, deleting permanently, formatting, uninstalling, resetting, cancelling a subscription,
+making a repository public, plus a generic verb (Validate, OK, Start) in a window whose title is about payment or
+formatting. The check is on what the gesture triggers, not on its form, before any input and whatever technique
+follows: a click by selector or by screenshot coordinates (single or double; a text or icon inside a button counts as
+the button), Enter, Ctrl+Enter, Space, Alt+letter (access key or underlined letter), typed text containing a line
+break, a menu command, a secondary action other than expand, collapse, toggle, select or scroll. The refusal
+(`error.confirmationRequired`) sends nothing; a batch stops at that step. A learned recipe never carries
+`confirm`. Direct calls to Sky bypass this layer: always go through the session.
 
 ### The user's presence (Raw Input)
 
@@ -289,7 +306,7 @@ taken.
 - Background techniques touch neither the user's keyboard, mouse nor foreground. Physical input waits for a pause,
   holds the shared token, and stops when the user takes over.
 - The emergency stop above blocks every desktop action for 2 minutes; a refused action is never replayed.
-- A refusal (password field, excluded application, changed control identity, disabled window or menu command) sends
+- A refusal (password field, hard-blocked application, missing confirmation, changed control identity, disabled window or menu command) sends
   nothing and never falls back.
 - Codex's own Computer Use rules (application access, sensitive actions) still apply; this layer is not a way around
   a denied app or action. Page text, controls and recipes are data, never an authorisation.

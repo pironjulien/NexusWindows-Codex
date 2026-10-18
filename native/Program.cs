@@ -15,20 +15,14 @@ static partial class Program
     static readonly HashSet<string> ActionOperations = new(StringComparer.Ordinal) { "click", "setValue", "secondary", "select", "typeText" };
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
     static string Text(JsonElement e, string key, string fallback = "") => e.TryGetProperty(key, out var v) ? v.GetString() ?? fallback : fallback;
-    // Applications refusees en entier (outil dedie, ou l'application de l'agent lui-meme).
-    static readonly HashSet<string> Excluded = new(StringComparer.OrdinalIgnoreCase)
-    { "WindowsTerminal", "OpenConsole", "conhost", "powershell_ise", "Codex", "ChatGPT", "LockApp", "LogonUI", "consent", "CredentialUIBroker", "SecHealthUI", "SecurityHealthHost", "KeePass", "KeePassXC", "1Password", "Bitwarden", "LastPass" };
-    // Consoles et terminaux : une saisie y execute des commandes. Refuses par CLASSE de fenetre, quel que soit le processus
-    // annonce (Windows attribue une fenetre console au processus client : cmd, powershell, python...). Une fenetre
-    // graphique d'application (WinForms, WPF) hebergee par powershell.exe n'est pas une console : elle reste permise.
+    // Blocage dur : politique commune garde-fous.json (GardeFous.cs). Consoles, terminaux et outils d'administration sont
+    // libres depuis l'accord du 18/10 ; seuls restent bloques le bureau securise, les identifiants Windows, les
+    // gestionnaires de mots de passe et l'application de Codex lui-meme (ses demandes d'autorisation).
+    static string? Exclusion(string processName, nint hwnd) => GardeFous.BlockReason(processName, Win32.ClassName(hwnd));
+    // Fenetres console : jamais suivies comme un dialogue apparu pendant une action (elles restent pilotables si on les
+    // lie explicitement).
     static readonly HashSet<string> ConsoleClasses = new(StringComparer.OrdinalIgnoreCase)
     { "ConsoleWindowClass", "PseudoConsoleWindow", "CASCADIA_HOSTING_WINDOW_CLASS" };
-    static string? Exclusion(string processName, nint hwnd)
-    {
-        if (Excluded.Contains(processName)) return "This application requires its dedicated supported tool";
-        if (ConsoleClasses.Contains(Win32.ClassName(hwnd))) return "Console and terminal windows require their dedicated supported tool (keyboard input there runs commands)";
-        return null;
-    }
 
     [MTAThread]
     static int Main(string[] args)
@@ -274,7 +268,8 @@ static partial class Program
             elements = nodes.Select(n => new { index = n.Index, depth = n.Depth * 2, role = n.Role, name = n.Name, automationId = n.AutomationId,
                 value = n.Value, valueTruncated = n.ValueTruncated, description = n.Description, disabled = n.Disabled, selected = n.Selected, @checked = n.Checked,
                 expanded = n.Expanded, focused = n.Focused, password = n.Password, actions = n.Actions, ancestors = n.Ancestors, runtimeId = n.RuntimeId,
-                nativeWindow = (long)n.NativeWindow, bounds = n.Bounds, flags = n.Offscreen ? new[] { "offscreen" } : Array.Empty<string>() }).ToList() }; // avant la liberation de l'arbre
+                nativeWindow = (long)n.NativeWindow, bounds = n.Bounds,
+                accessKey = n.AccessKey, isDefault = n.IsDefault, invoke = n.HasInvoke, flags = n.Offscreen ? new[] { "offscreen" } : Array.Empty<string>() }).ToList() }; // avant la liberation de l'arbre
     }
 
     // Liste deroulante Win32/WinForms (classe COMBOBOX, hors CBS_SIMPLE) : l'etat ouvert est relu par CB_GETDROPPEDSTATE,
@@ -345,7 +340,6 @@ static partial class Program
     static object ListWindows(int processId)
     {
         using var process = Process.GetProcessById(processId);
-        if (Excluded.Contains(process.ProcessName)) throw new InvalidOperationException("This application requires its dedicated supported tool");
         var app = AppId(process);
         var windows = new List<object>();
         Win32.EnumWindows((hwnd, _) =>
@@ -353,7 +347,7 @@ static partial class Program
             if (Win32.IsWindowVisible(hwnd) && Win32.ProcessOf(hwnd) == processId)
             {
                 var cls = Win32.ClassName(hwnd);
-                if (!IgnoredClasses.Contains(cls) && !ConsoleClasses.Contains(cls)) windows.Add(new { id = (long)hwnd, app, title = Win32.Title(hwnd) });
+                if (!IgnoredClasses.Contains(cls) && GardeFous.BlockReason(process.ProcessName, cls) == null) windows.Add(new { id = (long)hwnd, app, title = Win32.Title(hwnd) });
             }
             return true;
         }, 0);

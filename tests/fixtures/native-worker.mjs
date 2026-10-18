@@ -11,7 +11,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     ? { ok: false, message: 'provider error after possible effect' }
     : request.operation === 'stopped'
       ? { ok: false, error: 'EmergencyStopException', message: "Arrêt d'urgence demandé par Julien (Ctrl+Alt+Maj+Échap) : plus aucune action pendant encore 90 s ; ne pas contourner." }
-      : { ok: true, pid: process.pid, count, value: request.value };
+      : { ok: true, pid: process.pid, count, value: request.value, policy: process.env.NEXUS_GARDE_FOUS ?? null };
   const response = JSON.stringify({ requestId: request.operation === 'mismatch' ? 'wrong' : request.requestId, result }) + '\n';
   if (request.operation === 'duplicate') { process.stdout.write(response + response); continue; }
   if (request.operation === 'trailing') { process.stdout.write(response + 'broken\n'); continue; }
