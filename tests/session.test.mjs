@@ -18,7 +18,7 @@ test('foreground contention prevents physical input and reports a deferred outco
   assert.equal(session.metrics()[0].status, 'deferred');
 });
 
-test('foreground lease surrounds activation and input but not reads or background values', async t => {
+test('foreground lease surrounds activation, input and Sky semantic values, but not reads', async t => {
   let held = false, acquisitions = 0;
   const { session, sky, observation } = await setup(t, { native: {
     async withForeground(_, action) { acquisitions++; held = true; try { return await action(); } finally { held = false; } },
@@ -28,11 +28,14 @@ test('foreground lease surrounds activation and input but not reads or backgroun
   await session.act(observation, { kind: 'click', selector: button });
   assert.equal(held, false);
   const obs = await session.observe();
-  await session.act(obs, { kind: 'setValue', selector: { automationId: 'input' }, value: 'background' });
   assert.equal(acquisitions, 1);
+  // set_value de Sky passe par UI Automation géré, qui peut donner le focus : sous le jeton (revue du 16/10).
+  sky.set_value = async input => { assert.equal(held, true); sky.calls.push(input); };
+  await session.act(obs, { kind: 'setValue', selector: { automationId: 'input' }, value: 'semantic' });
+  assert.equal(acquisitions, 2);
   sky.activate_window = async () => assert.equal(held, true);
   await session.activate();
-  assert.equal(acquisitions, 2);
+  assert.equal(acquisitions, 3);
 });
 function provider() {
   return {

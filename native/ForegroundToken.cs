@@ -6,6 +6,7 @@ using System.Text.Json;
 sealed class ForegroundToken : IDisposable
 {
     const long Offset = 1L << 32;
+    public const int WaitMs = 8000; // attente maximale du jeton ; lib/native.mjs (TOKEN_WAIT_MS) la depasse toujours
     readonly FileStream stream;
     ForegroundToken(FileStream stream) => this.stream = stream;
 
@@ -24,7 +25,10 @@ sealed class ForegroundToken : IDisposable
                 try { stream.Lock(Offset, 1); break; }
                 catch (IOException)
                 {
-                    if (timer.ElapsedMilliseconds >= 8000)
+                    // Attente interruptible (shared/foreground-token.md, comme `abort` de shared/foreground_lock.py) :
+                    // l'arret d'urgence est relu a chaque tour de 50 ms, jamais seulement apres les 8 s.
+                    EmergencyStop.ThrowIfStopped();
+                    if (timer.ElapsedMilliseconds >= WaitMs)
                     {
                         stream.Position = 0;
                         var bytes = new byte[4096];
@@ -55,4 +59,72 @@ sealed class ForegroundToken : IDisposable
         try { stream.SetLength(0); stream.Flush(); }
         finally { try { stream.Unlock(Offset, 1); } finally { stream.Dispose(); } }
     }
+}
+
+// Julien a-t-il repris clavier ou souris pendant l'attente du jeton ? GetLastInputInfo compte toute entree (injectee
+// comprise) : prudent, une entree d'un autre agent differe aussi. Aucune entree n'a encore ete envoyee ici.
+sealed class JulienActiveException(string message) : InvalidOperationException(message);
+static class JulienPause
+{
+    public static void ThrowIfActive(int? quietMs)
+    {
+        if (quietMs is not { } quiet || quiet <= 0) return;
+        var info = new Win32.LastInputInfo { Size = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Win32.LastInputInfo>() };
+        if (!Win32.GetLastInputInfo(ref info)) throw new JulienActiveException("Presence de Julien illisible apres la prise du jeton : entree differee, rien n'a ete envoye.");
+        var idle = unchecked(Win32.GetTickCount() - info.Time);
+        if (idle < quiet)
+            throw new JulienActiveException($"Julien utilise le clavier ou la souris (derniere entree il y a {idle} ms, apres l'attente du jeton) : entree differee, rien n'a ete envoye. Reobserver plus tard ; ne jamais rejouer automatiquement.");
+    }
+}
+
+// Premier plan rendu a Julien SOUS le jeton, avant de rendre le jeton (shared/foreground-token.md) : la fenetre active
+// notee a la prise du jeton est remise devant, seulement si la fenetre cible (son processus) tient encore le premier
+// plan. Si Julien est passe a une autre fenetre, rien ne lui est repris. Etats : restored, not-taken (la cible n'a pas
+// le premier plan, ou Julien etait deja dans la cible), kept-by-julien, none (aucune fenetre a qui le rendre), refused.
+static class ForegroundReturn
+{
+    const uint WM_SYSCOMMAND = 0x0112, SC_HOTKEY = 0xF150;
+    static readonly HashSet<string> Switchers = new(StringComparer.OrdinalIgnoreCase) { "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlExplorerHostIslandWindow", "MultitaskingViewFrame", "TaskSwitcherWnd", "ForegroundStaging" };
+
+    public static string GiveBack(nint noted, nint target)
+    {
+        if (target == 0 || noted == 0) return "none";
+        var fg = Win32.GetForegroundWindow();
+        if (fg == noted) return "not-taken";
+        var targetPid = Win32.ProcessOf(target);
+        if (Win32.ProcessOf(noted) == targetPid) return "not-taken"; // Julien etait deja dans l'application cible
+        if (fg == 0) return "not-taken";
+        if (Win32.ProcessOf(fg) != targetPid) return "kept-by-julien";
+        if (!Restorable(noted)) return "none";
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            if (Win32.GetForegroundWindow() != fg) break; // le premier plan a change entre-temps : ne rien forcer
+            var own = Win32.GetCurrentThreadId();
+            var thread = Win32.GetWindowThreadProcessId(fg, out _);
+            var attached = thread != 0 && thread != own && Win32.AttachThreadInput(own, thread, true);
+            try
+            {
+                if (Win32.GetForegroundWindow() == fg) { Win32.BringWindowToTop(noted); Win32.SetForegroundWindow(noted); }
+            }
+            finally { if (attached) Win32.AttachThreadInput(own, thread, false); }
+            if (Wait(noted, 150)) return "restored";
+        }
+        // Windows refuse l'attache (cadre d'une application Store) : la fenetre cible au premier plan le rend elle-meme
+        // (DefWindowProc traite WM_SYSCOMMAND SC_HOTKEY par SetForegroundWindow(lParam)). Jamais a une fenetre de Julien.
+        var current = Win32.GetForegroundWindow();
+        if (current != 0 && Win32.ProcessOf(current) == targetPid && Win32.PostMessageW(current, WM_SYSCOMMAND, (nint)SC_HOTKEY, noted) && Wait(noted, 300)) return "restored";
+        return Win32.GetForegroundWindow() is var now && now != 0 && Win32.ProcessOf(now) != targetPid && now != noted ? "kept-by-julien" : "refused";
+    }
+    static bool Wait(nint window, int ms)
+    {
+        var clock = Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < ms)
+        {
+            if (Win32.GetForegroundWindow() == window) return true;
+            Thread.Sleep(10);
+        }
+        return Win32.GetForegroundWindow() == window;
+    }
+    static bool Restorable(nint hwnd) =>
+        Win32.IsWindow(hwnd) && Win32.IsWindowVisible(hwnd) && !Win32.IsIconic(hwnd) && !Win32.IsCloaked(hwnd) && !Switchers.Contains(Win32.ClassName(hwnd));
 }

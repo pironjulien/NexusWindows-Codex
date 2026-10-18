@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, mkdir, readFile, writeFile, readdir, open } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile, readdir, open, utimes } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { ApplicationMemory } from '../lib/memory.mjs';
+import { ApplicationMemory, LOCK_STALE_MS, LOCK_WRITE_MS } from '../lib/memory.mjs';
 import { digest, validateSelector } from '../lib/tree.mjs';
 
 const recipe = () => ({
@@ -66,4 +67,27 @@ test('an explicit invalid ancestor is rejected rather than silently broadening a
   for (const ancestor of [null, false, '', 0]) {
     assert.throws(() => validateSelector({ automationId: 'clear', ancestor }));
   }
+});
+
+test('an orphaned lock from a dead process or a stale lock is taken over; a live fresh lock is respected', async t => {
+  const { memory, file } = await setup(t);
+  await mkdir(path.dirname(file), { recursive: true });
+  const dead = await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['-e', ''], { windowsHide: true });
+    child.once('error', reject); child.once('close', () => resolve(child.pid));
+  });
+  await writeFile(file + '.lock', JSON.stringify({ pid: dead, at: Date.now() }));
+  await memory.save('fixture!app', 'clear', recipe()); // processus mort entre la prise et la libération
+  assert.equal((await memory.read('fixture!app', 'clear')).verifiedCount, 1);
+  await writeFile(file + '.lock', JSON.stringify({ pid: process.pid, at: Date.now() - LOCK_STALE_MS - 1000 }));
+  await memory.save('fixture!app', 'clear', { ...recipe(), verifiedCount: 2 }); // verrou trop ancien
+  await writeFile(file + '.lock', '');
+  const old = new Date(Date.now() - LOCK_WRITE_MS - 1000);
+  await utimes(file + '.lock', old, old);
+  await memory.save('fixture!app', 'clear', { ...recipe(), verifiedCount: 3 }); // prise interrompue avant le pid
+  assert.equal((await memory.read('fixture!app', 'clear')).verifiedCount, 3);
+  assert.deepEqual((await readdir(path.dirname(file))).sort(), ['clear.json']);
+  await writeFile(file + '.lock', JSON.stringify({ pid: process.pid, at: Date.now() }));
+  await assert.rejects(memory.save('fixture!app', 'clear', { ...recipe(), verifiedCount: 4 }), error => error.code === 'EEXIST' && /another session/.test(error.message));
+  assert.equal((await memory.read('fixture!app', 'clear')).verifiedCount, 3);
 });

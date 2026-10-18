@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-10-18
+
+Defects found by the cross-agent review of 2026-10-16, fixed at the root.
+
+### Fixed
+- **No more double click**: after a background click "sent" with no visible effect after 1.618 s, the session used
+  to redo a real click (two actions, reported "verified"). The physical fallback now only happens after a "nothing
+  took" read back by the helper; otherwise the result is `sent-unconfirmed`: sent, effect not read back, never
+  counted as a success nor replayed.
+- **The user's pause respected everywhere**: `activate()`, `set_value` and Sky's secondary actions (which can give
+  focus) wait for the user's pause and go under the shared token, like real input.
+- **Foreground handed back**: under the token, the helper notes the user's active window, then puts it back in front
+  at the end if the target application still holds the foreground. If the user switched to another window, nothing
+  is taken back from them. The result says so (`foregroundReturned`).
+- **Foreground UIA click**: the user's pause is checked again inside the helper once the token is taken (the wait can
+  last 8 s). The `--com-worker` child is bound to the helper (Job Object): it dies with it and can no longer act
+  afterwards. Node timeouts exceed the helper's (token wait + action).
+- **Emergency stop**: the token wait (8 s) stops as soon as the hotkey is pressed, every 50 ms. Physical typing goes
+  character by character, with a stop check before each one (before: every 48 letters).
+- **Guard restarted**: if the guard (stop hotkey, user presence) crashes, every action restarts it; while presence is
+  unknown, physical input is deferred with a clear message, never sent blind.
+- **Win32 menus**: a command's disabled state is read after `WM_INITMENU` and `WM_INITMENUPOPUP`, like a real
+  opening; without an answer, the command is refused ("not verifiable").
+- **Off-screen element**: `IsOffscreen` is read and reported (`flags: ['offscreen']`); a click on an element of which
+  nothing is visible in its window is refused.
+- **Window closed during a request**: "refused, nothing sent" instead of "unknown result", and never a fallback to a
+  window that is gone.
+- **Application memory**: a lock left by a dead process no longer blocks forever; it carries the pid and the time,
+  and is taken over if its holder is dead or if it is too old.
+
+### Added
+- Tests: new and rewritten Node tests for the points above (double action, pause and token, foreground handed back,
+  stop while typing, guard restarted, unknown presence, off-screen element, orphan lock).
+
+### Changed
+- README renamed to NexusWindows for Codex, the Codex edition of the NexusWindows family: badges, banner, links to
+  the other Nexus projects and to the project page (julienpiron.fr/nexuswindows).
+
 ## [1.4.0] - 2026-10-16
 
 Fixes measured by the cross-agent bench of 2026-10-16 (16/20 in the morning with 1.3.0, 19/20 after).

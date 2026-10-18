@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -214,11 +215,42 @@ static class ComWorker
     }
 }
 
-// Cote helper gere : un enfant --com-worker reutilise, une requete a la fois, delai borne.
+// Cote helper gere : un enfant --com-worker reutilise, une requete a la fois, delai borne. L'enfant est rattache a un
+// Job Object (KILL_ON_JOB_CLOSE) : si le helper meurt (delai depasse cote Node, qui le tue), Windows tue aussi l'enfant,
+// qui ne peut donc plus agir apres coup sur une action deja rapportee « inconnue ».
 static class ComBridge
 {
     static Process? child;
-    const int TimeoutMs = 10000;
+    public const int TimeoutMs = 10000; // lib/native.mjs (COM_ACTION_MS) le depasse toujours
+    static nint job;
+
+    [StructLayout(LayoutKind.Sequential)]
+    struct BasicLimit
+    {
+        public long PerProcessUserTimeLimit, PerJobUserTimeLimit; public uint LimitFlags; public nuint MinimumWorkingSetSize, MaximumWorkingSetSize;
+        public uint ActiveProcessLimit; public nuint Affinity; public uint PriorityClass, SchedulingClass;
+    }
+    [StructLayout(LayoutKind.Sequential)] struct IoCounters { public ulong ReadOperations, WriteOperations, OtherOperations, ReadBytes, WriteBytes, OtherBytes; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ExtendedLimit { public BasicLimit Basic; public IoCounters Io; public nuint ProcessMemoryLimit, JobMemoryLimit, PeakProcessMemoryUsed, PeakJobMemoryUsed; }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] static extern nint CreateJobObjectW(nint attributes, string? name);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetInformationJobObject(nint job, int infoClass, ref ExtendedLimit info, int size);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool AssignProcessToJobObject(nint job, nint process);
+    const int JobObjectExtendedLimitInformation = 9;
+    const uint KillOnJobClose = 0x2000;
+
+    // Job du processus helper, cree une fois ; son handle n'est jamais ferme avant la fin du helper (fermeture = mort des
+    // enfants).
+    static nint Job()
+    {
+        if (job != 0) return job;
+        var created = CreateJobObjectW(0, null);
+        if (created == 0) throw new BackgroundNotApplicableException($"Job Object unavailable (error {Marshal.GetLastWin32Error()}); COM worker not started");
+        var info = new ExtendedLimit { Basic = new BasicLimit { LimitFlags = KillOnJobClose } };
+        if (!SetInformationJobObject(created, JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf<ExtendedLimit>()))
+            throw new BackgroundNotApplicableException($"Job Object limit refused (error {Marshal.GetLastWin32Error()}); COM worker not started");
+        return job = created;
+    }
 
     public static Outcome Call(object request)
     {
@@ -256,7 +288,15 @@ static class ComBridge
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
             StandardOutputEncoding = new UTF8Encoding(false), StandardInputEncoding = new UTF8Encoding(false), StandardErrorEncoding = new UTF8Encoding(false),
         };
+        var jobHandle = Job();
         child = Process.Start(start) ?? throw new BackgroundNotApplicableException("COM UI Automation worker did not start");
+        // Avant toute requete : un enfant qui ne serait pas lie au helper pourrait lui survivre. Rien n'a ete envoye.
+        if (!AssignProcessToJobObject(jobHandle, child.Handle))
+        {
+            var error = Marshal.GetLastWin32Error();
+            Stop();
+            throw new BackgroundNotApplicableException($"COM worker could not be bound to the helper (Job Object, error {error}); nothing was sent");
+        }
         child.ErrorDataReceived += (_, _) => { }; // vide stderr sans le garder
         child.BeginErrorReadLine();
         return child;

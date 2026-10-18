@@ -1,6 +1,6 @@
 {
   "name": "codex-windows-computer-use",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Background-first Windows desktop control for OpenAI Codex: observation, verification and application memory over Codex's supported Computer Use (Sky) API",
   "type": "module",
   "license": "MIT",

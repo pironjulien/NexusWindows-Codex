@@ -23,17 +23,22 @@ static partial class Program
 
     static object RunAction(string op, string mode, Node target, List<Node> nodes, nint window, JsonElement request)
     {
+        InputStarted = true; // au-dela, toute erreur peut suivre une entree : resultat inconnu
         var before = Win32.Probe();
-        var outcome = mode == "foreground" ? ForegroundAction(op, target, window) : BackgroundAction(op, target, nodes, window, request);
+        bool? takenUnderToken = null;
+        string? giveBack = null;
+        var outcome = mode == "foreground"
+            ? ForegroundAction(op, target, window, request, out takenUnderToken, out giveBack)
+            : BackgroundAction(op, target, nodes, window, request);
         // Les messages postes sont traites de facon asynchrone : un court delai attrape une fenetre qui s'active elle-meme.
         Thread.Sleep(30);
         var after = Win32.Probe();
         var targetPid = Win32.ProcessOf(window);
-        var taken = after.Foreground != before.Foreground && after.Foreground != 0 && Win32.ProcessOf(after.Foreground) == targetPid;
+        var taken = takenUnderToken ?? (after.Foreground != before.Foreground && after.Foreground != 0 && Win32.ProcessOf(after.Foreground) == targetPid);
         return new
         {
             ok = true, technique = outcome.Technique, mechanism = outcome.Mechanism, effect = outcome.Effect,
-            foregroundTaken = taken,
+            foregroundTaken = taken, foregroundReturned = giveBack,
             cursorMoved = before.Cursor.X != after.Cursor.X || before.Cursor.Y != after.Cursor.Y,
             // Toute entree (de Julien ou injectee) pendant l'action : les techniques d'arriere-plan n'en injectent aucune.
             inputDuringAction = before.LastInput != after.LastInput,
@@ -41,24 +46,35 @@ static partial class Program
         };
     }
 
-    // Repli des observations natives : UIA sous le jeton de premier plan commun (peut prendre le premier plan).
-    static Outcome ForegroundAction(string op, Node target, nint window)
+    // Repli des observations natives : UIA sous le jeton de premier plan commun (peut prendre le premier plan). Une fois
+    // le jeton pris (attente jusqu'a 8 s), la pause de Julien est recontrolee juste avant Invoke ou SetFocus ; la fenetre
+    // active notee alors lui est rendue sous le jeton, meme si l'action echoue.
+    static Outcome ForegroundAction(string op, Node target, nint window, JsonElement request, out bool? taken, out string? giveBack)
     {
+        taken = null; giveBack = null;
         if (op != "click") throw new BackgroundNotApplicableException("Only a semantic click has a foreground UI Automation path");
         if (ComUia.IsSynthetic(target.RuntimeId)) throw new BackgroundNotApplicableException("Combo box options read by messages have no UI Automation path");
         // Elements de liste Win32 servis par MSAA : leur action par defaut est un double clic par SendInput.
         if (target.FrameworkId == "Win32" && target.Role == "listitem") throw new BackgroundNotApplicableException("Win32 list items have no safe UI Automation path");
-        if (target.HasInvoke)
+        var (purpose, call) = target.HasInvoke ? ("UIA Invoke (foreground)", "invoke")
+            : target.Role is "edit" or "document" ? ("UIA SetFocus", "setFocus")
+            : throw new BackgroundNotApplicableException("No foreground UI Automation path for this control");
+        int? quietMs = request.TryGetProperty("quietMs", out var q) && q.ValueKind == JsonValueKind.Number ? q.GetInt32() : null;
+        using var token = ForegroundToken.Acquire(purpose);
+        JulienPause.ThrowIfActive(quietMs);
+        EmergencyStop.ThrowIfStopped();
+        var noted = Win32.GetForegroundWindow();
+        try
         {
-            using var token = ForegroundToken.Acquire("UIA Invoke (foreground)");
-            return ComBridge.Call(new { op = "invoke", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow }) with { Technique = "foreground:uia" };
+            return ComBridge.Call(new { op = call, windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow }) with { Technique = "foreground:uia" };
         }
-        if (target.Role is "edit" or "document")
+        finally
         {
-            using var token = ForegroundToken.Acquire("UIA SetFocus");
-            return ComBridge.Call(new { op = "setFocus", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow }) with { Technique = "foreground:uia" };
+            Thread.Sleep(30); // une activation postee par le fournisseur arrive de facon asynchrone
+            var now = Win32.GetForegroundWindow();
+            taken = now != noted && now != 0 && Win32.ProcessOf(now) == Win32.ProcessOf(window);
+            giveBack = ForegroundReturn.GiveBack(noted, window);
         }
-        throw new BackgroundNotApplicableException("No foreground UI Automation path for this control");
     }
 
     static Outcome BackgroundAction(string op, Node target, List<Node> nodes, nint window, JsonElement request)
@@ -316,8 +332,10 @@ static partial class Program
         }
         var wanted = path.Split('>').Select(s => Clean(s)).ToArray();
         if (wanted.Length == 0 || wanted.Any(s => s.Length == 0)) throw new InvalidOperationException("Invalid menu path");
-        var items = new List<(string[] Path, uint Id, bool Enabled)>();
-        void Walk(nint m, string[] prefix, int depth)
+        // Chain : sous-menus ouverts pour atteindre la commande (menu parent, rang du sous-menu, sous-menu), puis la
+        // commande elle-meme (menu qui la porte, rang).
+        var items = new List<(string[] Path, uint Id, nint Menu, int Index, (nint Parent, int Index, nint Sub)[] Chain)>();
+        void Walk(nint m, string[] prefix, int depth, (nint, int, nint)[] chain)
         {
             var count = Math.Min(Win32.GetMenuItemCount(m), 256);
             for (var i = 0; i < count; i++)
@@ -328,21 +346,47 @@ static partial class Program
                 if (label.Length == 0) continue;
                 var current = prefix.Append(label).ToArray();
                 var sub = Win32.GetSubMenu(m, i);
-                if (sub != 0) { if (depth < 6) Walk(sub, current, depth + 1); continue; }
+                if (sub != 0) { if (depth < 6) Walk(sub, current, depth + 1, [.. chain, (m, i, sub)]); continue; }
                 var id = Win32.GetMenuItemID(m, i);
-                if (id != 0 && id != 0xFFFFFFFF) items.Add((current, id, (state & 0x3) == 0));
+                if (id != 0 && id != 0xFFFFFFFF) items.Add((current, id, m, i, chain));
             }
         }
-        Walk(menu, [], 0);
+        Walk(menu, [], 0, []);
         bool Same(string[] a, string[] b) => a.Length == b.Length && a.Zip(b).All(p => string.Equals(p.First, p.Second, StringComparison.OrdinalIgnoreCase));
         var found = items.Where(i => Same(i.Path, wanted)).ToList();
         if (found.Count == 0) found = items.Where(i => i.Path.Length >= wanted.Length && Same(i.Path[^wanted.Length..], wanted)).ToList();
         if (found.Count == 0) throw new BackgroundNotApplicableException("Menu command not found in the Win32 menu bar");
         if (found.Count > 1) throw new BackgroundNotApplicableException("Menu path is ambiguous; give the full path");
-        if (!found[0].Enabled) throw new ActionRefusedException("Menu command is disabled");
+        var item = found[0];
+        // L'etat grise d'une commande n'est fiable qu'apres l'ouverture de son menu : l'application le met a jour en
+        // traitant WM_INITMENU puis WM_INITMENUPOPUP (MFC, WinForms MainMenu, Win32). Ces messages lui sont envoyes comme
+        // par une vraie ouverture, sans rien afficher ; sans reponse, l'etat est « non verifiable » et rien n'est poste.
+        string Unverifiable(string why) => $"Menu command state cannot be verified ({why}); nothing was sent";
+        if (Win32.Send(window, Win32.WM_INITMENU, menu) is null) throw new ActionRefusedException(Unverifiable("the application did not answer WM_INITMENU"));
+        var opened = new List<nint>();
+        try
+        {
+            foreach (var (_, index, sub) in item.Chain)
+            {
+                if (Win32.Send(window, Win32.WM_INITMENUPOPUP, sub, index & 0xFFFF) is null) throw new ActionRefusedException(Unverifiable("the application did not answer WM_INITMENUPOPUP"));
+                opened.Add(sub);
+            }
+            // Relecture apres initialisation : la commande doit etre restee a sa place (menus dynamiques reconstruits).
+            if (Win32.GetMenuItemID(item.Menu, item.Index) != item.Id || Clean(Win32.MenuLabel(item.Menu, item.Index)) != item.Path[^1])
+                throw new ActionRefusedException(Unverifiable("the menu changed while it was initialized; inspect again"));
+            var state = Win32.GetMenuState(item.Menu, (uint)item.Index, 0x400);
+            if (state == 0xFFFFFFFF) throw new ActionRefusedException(Unverifiable("the command is no longer in its menu"));
+            if ((state & 0x3) != 0) throw new ActionRefusedException("Menu command is disabled");
+        }
+        finally
+        {
+            // Fermeture symetrique, comme a la destruction d'un menu deroulant reel (sans effet si l'application l'ignore).
+            for (var i = opened.Count - 1; i >= 0; i--) Win32.Send(window, Win32.WM_UNINITMENUPOPUP, opened[i]);
+        }
         EmergencyStop.ThrowIfStopped();
         var before = Win32.Probe();
-        Win32.Post(window, Win32.WM_COMMAND, (nint)(found[0].Id & 0xFFFF), 0);
+        InputStarted = true;
+        Win32.Post(window, Win32.WM_COMMAND, (nint)(item.Id & 0xFFFF), 0);
         Thread.Sleep(30);
         var after = Win32.Probe();
         return new

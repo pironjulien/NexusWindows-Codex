@@ -22,14 +22,14 @@ unsafe sealed class ComUia
         SelectionItemPatternId = 10010, TextPatternId = 10014, TogglePatternId = 10015;
     const int RuntimeIdProperty = 30000, BoundingRectangleProperty = 30001, ProcessIdProperty = 30002, ControlTypeProperty = 30003,
         NameProperty = 30005, HasKeyboardFocusProperty = 30008, IsEnabledProperty = 30010, AutomationIdProperty = 30011,
-        HelpTextProperty = 30013, IsPasswordProperty = 30019, NativeWindowHandleProperty = 30020, FrameworkIdProperty = 30024,
+        HelpTextProperty = 30013, IsPasswordProperty = 30019, NativeWindowHandleProperty = 30020, IsOffscreenProperty = 30022, FrameworkIdProperty = 30024,
         IsExpandCollapseAvailable = 30028, IsInvokeAvailable = 30031, IsSelectionItemAvailable = 30036, IsSelectionAvailable = 30037,
         IsTextAvailable = 30040, IsToggleAvailable = 30041, IsValueAvailable = 30043, ValueValueProperty = 30045,
         ExpandCollapseStateProperty = 30070, SelectionItemIsSelectedProperty = 30079, ToggleStateProperty = 30086;
     static readonly int[] TreeProperties =
     [
         RuntimeIdProperty, BoundingRectangleProperty, ProcessIdProperty, ControlTypeProperty, NameProperty, HasKeyboardFocusProperty,
-        IsEnabledProperty, AutomationIdProperty, HelpTextProperty, IsPasswordProperty, NativeWindowHandleProperty, FrameworkIdProperty,
+        IsEnabledProperty, AutomationIdProperty, HelpTextProperty, IsPasswordProperty, NativeWindowHandleProperty, IsOffscreenProperty, FrameworkIdProperty,
         IsExpandCollapseAvailable, IsInvokeAvailable, IsSelectionItemAvailable, IsSelectionAvailable, IsTextAvailable, IsToggleAvailable,
         IsValueAvailable, ValueValueProperty, ExpandCollapseStateProperty, SelectionItemIsSelectedProperty, ToggleStateProperty,
     ];
@@ -401,7 +401,7 @@ unsafe sealed class ComUia
             Selected = CachedBool(element, IsSelectionItemAvailable) == true ? CachedBool(element, SelectionItemIsSelectedProperty) : null,
             Checked = check, NativeWindow = nativeWindow, FrameworkId = framework, ProcessId = CachedInt(element, ProcessIdProperty) ?? 0,
             HasInvoke = CachedBool(element, IsInvokeAvailable) == true, HasToggle = CachedBool(element, IsToggleAvailable) == true,
-            HasText = hasText, Bounds = Bounds(element),
+            HasText = hasText, Bounds = Bounds(element), Offscreen = CachedBool(element, IsOffscreenProperty) == true,
         };
         if (CachedBool(element, IsExpandCollapseAvailable) == true)
         {
@@ -613,7 +613,8 @@ sealed class Node
     public required string Role, Name, AutomationId, Description;
     public string FrameworkId = "";
     public string? Value;
-    public bool Disabled, Focused, Password, ValueTruncated, HasInvoke, HasToggle, HasText;
+    // Offscreen : UIA IsOffscreen (defile hors de la partie visible, fenetre reduite...), signale a la session.
+    public bool Disabled, Focused, Password, ValueTruncated, HasInvoke, HasToggle, HasText, Offscreen;
     public bool? Selected, Checked, Expanded;
     public nint NativeWindow;
     public required int[] RuntimeId, Ancestors;

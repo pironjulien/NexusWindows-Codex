@@ -3,11 +3,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile, readdir, utimes, mkdir } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
 import { WindowsSession, textChunks } from '../lib/session.mjs';
 import { Presence, JulienActiveError } from '../lib/presence.mjs';
 import { EmergencyStop } from '../lib/stop.mjs';
+import { NativeUIA } from '../lib/native.mjs';
 import { digest, parseTree, stateDigest } from '../lib/tree.mjs';
 
 const go = { automationId: 'go', role: 'button' };
@@ -80,13 +83,39 @@ test('a technique that does not apply falls back to Sky physical input under the
   assert.equal(tokens(), 1);
 });
 
-test('background input without any re-read effect falls back exactly once', async t => {
-  const { session, sky: s, observation } = await setup(t, { native: { async call() { return { technique: 'background:uia', mechanism: 'Invoke', effect: 'sent' }; } } });
+test('background input "sent" without a re-read effect is never repeated physically: sent-unconfirmed, never verified', async t => {
+  const { session, sky: s, observation, tokens } = await setup(t, { native: { async call() { return { technique: 'background:uia', mechanism: 'Invoke', effect: 'sent' }; } } });
+  const r = await session.act(observation, { kind: 'click', selector: go, expect: expectDone, timeoutMs: 0 });
+  assert.equal(r.status, 'sent-unconfirmed');
+  assert.equal(r.verified, false);
+  assert.deepEqual(r.attempts.map(a => [a.technique, a.outcome]), [['background:uia', 'effect-not-read']]);
+  assert.equal(s.calls.length, 0);
+  assert.equal(tokens(), 0);
+});
+
+test('a slow background effect is not doubled by a physical click (review of 16/10)', async t => {
+  let sent = 0;
+  const { session, sky: s, observation } = await setup(t, { native: { async call() {
+    setTimeout(() => { sent++; s.done = true; }, 300); // l'effet arrive après la fenêtre d'attente de la postcondition
+    return { technique: 'background:uia', mechanism: 'Invoke', effect: 'sent' };
+  } } });
+  s.click = async input => { s.calls.push(['click', input]); sent++; s.done = true; };
+  const r = await session.act(observation, { kind: 'click', selector: go, expect: expectDone, timeoutMs: 100 });
+  await new Promise(resolve => setTimeout(resolve, 400));
+  assert.equal(s.calls.length, 0);
+  assert.equal(r.status, 'sent-unconfirmed');
+  assert.equal(r.verified, false);
+  assert.equal(sent, 1); // une seule action réelle
+});
+
+test('a re-read "none" falls back exactly once, under the token, after Julien pauses', async t => {
+  const { session, sky: s, observation, tokens } = await setup(t, { native: { async call() { return { technique: 'background:uia', mechanism: 'Invoke', effect: 'none' }; } } });
   const r = await session.act(observation, { kind: 'click', selector: go, expect: expectDone, timeoutMs: 0 });
   assert.equal(r.status, 'verified');
   assert.deepEqual(r.attempts.map(a => [a.technique, a.outcome]), [['background:uia', 'no-effect'], ['physical:sky', undefined]]);
   assert.equal(s.calls.length, 1);
   assert.equal(s.calls[0][1].element_index, 2);
+  assert.equal(tokens(), 1);
 });
 
 test('a background effect that changed state but missed the postcondition is never repeated physically', async t => {
@@ -372,7 +401,7 @@ test('typing stops between chunks when Julien takes the keyboard back; the rest 
   const r = await session.act(observation, { kind: 'typeText', focus: { automationId: 'input' }, text, expect: expectDone });
   assert.equal(r.status, 'interrupted');
   assert.equal(r.verified, false);
-  assert.deepEqual(r.typed, { chunks: 1, total: 3 });
+  assert.deepEqual(r.typed, { chunks: 1, total: 120 });
   assert.equal(s.calls.length, 1);
   assert.equal(r.julienInput, true);
 });
@@ -401,4 +430,114 @@ test('state digest sees values and states that the structure hash ignores', () =
   const a = parseTree('0 window W\n\t1 edit Name Value: x ID: n');
   const b = parseTree('0 window W\n\t1 edit Name Value: y ID: n');
   assert.notEqual(stateDigest(a), stateDigest(b));
+});
+
+// ---- 6. Revue croisée du 16/10 : premier plan, présence, arrêt pendant la frappe, élément hors champ ----
+function activeJulien(c, presence) {
+  // Julien tape sans pause : chaque attente voit une nouvelle entrée.
+  return { quietMs: 400, maxWaitMs: 1200, sleep: async ms => { c.now += ms; presence.input(); } };
+}
+test('activate waits for Julien to pause like any foreground input; an active Julien defers it', async t => {
+  const { c, monotonic } = clock();
+  const presence = new Presence({ monotonic });
+  presence.setSource('raw-input');
+  const { session, sky: s, tokens } = await setup(t, { presence, pause: activeJulien(c, presence) });
+  let activations = 0;
+  s.activate_window = async () => { activations++; };
+  presence.input();
+  await assert.rejects(session.activate(), error => error.julienActive && /rien n'a été envoyé/.test(error.message));
+  assert.equal(activations, 0);
+  assert.equal(tokens(), 0);
+});
+
+test('Sky set_value and secondary actions, which can give focus, wait for Julien and run under the token', async t => {
+  const { c, monotonic } = clock();
+  const presence = new Presence({ monotonic });
+  presence.setSource('raw-input');
+  const { session, sky: s, observation, tokens } = await setup(t, { presence, pause: activeJulien(c, presence) });
+  presence.input();
+  await assert.rejects(session.act(observation, { kind: 'setValue', selector: { automationId: 'input' }, value: 'x' }), error => error.julienActive);
+  assert.equal(s.calls.length, 0);
+  assert.equal(tokens(), 0);
+  const quiet = await setup(t, { presence, pause: { quietMs: 400, maxWaitMs: 1200, sleep: async ms => { c.now += ms; } } });
+  presence.input();
+  const r = await quiet.session.act(quiet.observation, { kind: 'setValue', selector: { automationId: 'input' }, value: 'x', expect: expectDone });
+  assert.equal(r.status, 'verified');
+  assert.equal(r.technique, 'sky:semantic');
+  assert.equal(quiet.tokens(), 1);
+  assert.ok(r.waitedMs >= 400);
+});
+
+test('every foreground action hands its target window to the token helper and reports the window given back', async t => {
+  const seen = [];
+  const { session, sky: s, observation } = await setup(t, { native: {
+    async withForeground(purpose, action, options) {
+      seen.push([purpose, options?.window?.id]);
+      const value = await action();
+      options?.onRelease?.('restored');
+      return value;
+    },
+  } });
+  const r = await session.act(observation, { kind: 'click', selector: go, expect: expectDone });
+  assert.equal(r.technique, 'physical:sky');
+  assert.equal(r.foregroundReturned, 'restored');
+  await session.activate();
+  assert.deepEqual(seen, [['Sky click', 10], ['activate_window', 10]]);
+  assert.equal(s.calls.length, 1);
+});
+
+test('the token transport passes the target window and reads the give-back report, also after a failed action', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-token-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const native = new NativeUIA(process.execPath, { tokenArgs: [fileURLToPath(new URL('./fixtures/token-helper.mjs', import.meta.url))], emergencyStop: stopIn(root) });
+  const states = [];
+  assert.equal(await native.withForeground('fixture', async () => 42, { window: { id: 77, app: 'x' }, onRelease: s => states.push(s) }), 42);
+  await assert.rejects(native.withForeground('fixture', async () => { throw Error('action failed'); }, { window: { id: 78, app: 'x' }, onRelease: s => states.push(s) }), /action failed/);
+  await native.withForeground('fixture', async () => {}, { onRelease: s => states.push(s) });
+  assert.deepEqual(states, ['restored:77', 'restored:78', 'none']);
+});
+
+test('an emergency stop pressed while typing stops before the next character; nothing more is sent', async t => {
+  const { session, sky: s, observation, root } = await setup(t);
+  s.onType = () => { if (s.calls.length === 2) writeFileSync(path.join(root, 'stop'), JSON.stringify({ by: 'Test', at: Date.now() / 1000, nonce: 'typing' })); };
+  const r = await session.act(observation, { kind: 'typeText', focus: { automationId: 'input' }, text: 'abcdefghij', expect: expectDone });
+  assert.equal(r.status, 'interrupted');
+  assert.equal(r.interrupted, 'emergency-stop');
+  assert.deepEqual(r.typed, { chunks: 2, total: 10 });
+  assert.deepEqual(s.calls.map(c => c[1]), ['a', 'b']);
+});
+
+test('a planned guard with unknown presence defers physical input instead of assuming Julien is idle', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-bg-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const stop = stopIn(root);
+  t.after(() => stop.close());
+  stop.startGuard(process.execPath, [fileURLToPath(new URL('./fixtures/guard.mjs', import.meta.url)), '-', 'silent']);
+  const provider = sky();
+  const session = new WindowsSession(provider, { stateRoot: root, native: { async withForeground(_, action) { return action(); } }, emergencyStop: stop, pause: { sleep: async () => {} } });
+  await session.bind({ id: 10 });
+  await assert.rejects(session.act(await session.observe(), { kind: 'click', selector: go }), error => error.presenceUnknown && error.deferred && /rien n'a été envoyé/.test(error.message));
+  assert.equal(provider.calls.length, 0);
+  assert.equal(session.metrics().at(-1).status, 'deferred');
+});
+
+test('a click on an off-screen target with no visible part is refused before any input', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-bg-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const s = sky();
+  let hidden = true;
+  const native = nativeTree(s, { async call() { this.calls.push('call'); s.done = true; return { technique: 'background:uia', effect: 'sent' }; } });
+  s.get_window_state = (orig => async input => ({ ...(await orig(input)), accessibility: null }))(s.get_window_state.bind(s));
+  native.inspect = (inspect => async window => {
+    const r = await inspect(window);
+    r.elements = r.elements.map(e => e.index === 0 ? { ...e, bounds: [0, 0, 800, 600] }
+      : e.automationId === 'go' ? { ...e, flags: hidden ? ['offscreen'] : [], bounds: hidden ? [0, 900, 80, 24] : [10, 10, 80, 24] } : e);
+    return r;
+  })(native.inspect.bind(native));
+  const session = new WindowsSession(s, { stateRoot: root, native, emergencyStop: stopIn(root) });
+  await session.bind({ id: 10 });
+  await assert.rejects(session.act(await session.observe(), { kind: 'click', selector: go, expect: expectDone }), error => error.beforeInput && /off-screen/.test(error.message));
+  assert.deepEqual(native.calls, []);
+  hidden = false;
+  assert.equal((await session.act(await session.observe(), { kind: 'click', selector: go, expect: expectDone })).status, 'verified');
 });

@@ -17,6 +17,7 @@ static class Win32
     [StructLayout(LayoutKind.Sequential)] public struct LastInputInfo { public uint Size; public uint Time; }
 
     public const uint WM_COMMAND = 0x0111, WM_GETTEXT = 0x000D, WM_GETTEXTLENGTH = 0x000E;
+    public const uint WM_INITMENU = 0x0116, WM_INITMENUPOPUP = 0x0117, WM_UNINITMENUPOPUP = 0x0125;
     public const uint BM_GETCHECK = 0x00F0, BM_SETCHECK = 0x00F1;
     public const uint EM_SETSEL = 0x00B1, EM_REPLACESEL = 0x00C2;
     public const uint CB_GETCOUNT = 0x0146, CB_GETCURSEL = 0x0147, CB_GETLBTEXT = 0x0148, CB_GETLBTEXTLEN = 0x0149, CB_SETCURSEL = 0x014E,
@@ -38,6 +39,13 @@ static class Win32
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(nint hwnd);
     [DllImport("user32.dll")] public static extern bool IsIconic(nint hwnd);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(nint hwnd, out uint pid);
+    [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint attach, uint to, bool doAttach);
+    [DllImport("user32.dll")] public static extern bool BringWindowToTop(nint hwnd);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(nint hwnd);
+    [DllImport("dwmapi.dll", EntryPoint = "DwmGetWindowAttribute")] static extern int DwmGetWindowAttributeInt(nint hwnd, int attribute, out int value, int size);
+    // Fenetre masquee par le gestionnaire de fenetres (bureau virtuel, application suspendue) : DWMWA_CLOAKED.
+    public static bool IsCloaked(nint hwnd) => DwmGetWindowAttributeInt(hwnd, 14, out var cloaked, sizeof(int)) == 0 && cloaked != 0;
     [DllImport("user32.dll")] public static extern nint GetWindow(nint hwnd, uint command);
     [DllImport("user32.dll")] public static extern nint GetAncestor(nint hwnd, uint flags);
     [DllImport("user32.dll")] public static extern nint GetParent(nint hwnd);

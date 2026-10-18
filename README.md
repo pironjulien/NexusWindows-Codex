@@ -1,11 +1,27 @@
-# codex-windows-computer-use
+# NexusWindows for Codex
 
-A Windows layer for the OpenAI Codex desktop app's **Computer Use** plugin. It keeps Codex's supported Computer Use
-API (`@oai/sky`) for window inventory, screenshots and physical input, and adds a local .NET helper that acts **in
-the background first**: Win32 messages and UI Automation without focus, so the user keeps their mouse, keyboard and
-foreground window. Every action is checked against an explicit postcondition.
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](package.json)
+[![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](native)
+[![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)](#installation)
 
-Version 1.4.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+[![NexusWindows: Windows computer use for AI agents, in the background. Works with Claude, Codex and Antigravity.](docs/assets/banner.webp)](https://julienpiron.fr/nexuswindows/)
+
+**Windows computer use for Codex, in the background.** A Windows layer for the OpenAI Codex desktop app's
+**Computer Use** plugin. It keeps Codex's supported Computer Use API (`@oai/sky`) for window inventory, screenshots
+and physical input, and adds a local .NET helper that acts **in the background first**: Win32 messages and UI
+Automation without focus, so the user keeps their mouse, keyboard and foreground window. Every action is checked
+against an explicit postcondition.
+
+Version 1.4.1 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+
+Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
+([Claude](https://github.com/pironjulien/claude-windows-computer-use) ·
+[Codex](https://github.com/pironjulien/codex-windows-computer-use) ·
+[Antigravity](https://github.com/pironjulien/antigravity-windows-computer-use)),
+[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/antigravity-browser-use)),
+[NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/android-computer-use)).
+Project page: [julienpiron.fr/nexuswindows](https://julienpiron.fr/nexuswindows/).
 
 ## Why
 
@@ -111,7 +127,7 @@ pixel is ever replayed, and typed content is never stored.
 ## Working alongside other agents
 
 This layer runs next to two other desktop agents on the same PC (a Claude MCP server,
-[claude-windows-computer-use](https://github.com/pironjulien/claude-windows-computer-use), and an Antigravity layer).
+[NexusWindows for Claude](https://github.com/pironjulien/claude-windows-computer-use), and an Antigravity layer).
 They coordinate through two file-based protocols that any agent can implement:
 
 **Foreground token** (`%USERPROFILE%\.nexus\foreground.lock`): held only while really using the mouse or the
@@ -255,7 +271,7 @@ and .NET helper ran with a fake Sky that refuses and counts any physical input.
 | Agent | Morning | After fixes |
 |---|---|---|
 | This layer (1.3.0, then 1.4.0) | 16/20 | **19/20** |
-| [claude-windows-computer-use](https://github.com/pironjulien/claude-windows-computer-use) | 17/20 | **19/20** |
+| [NexusWindows for Claude](https://github.com/pironjulien/claude-windows-computer-use) | 17/20 | **19/20** |
 | Antigravity layer | 18/20 | **19/20** |
 
 What still keeps this layer from 20: the real path through Sky inside the Codex app was not measured in this bench

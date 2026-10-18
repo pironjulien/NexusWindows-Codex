@@ -35,8 +35,12 @@ static partial class Program
     {
         Console.InputEncoding = new UTF8Encoding(false);
         Console.OutputEncoding = new UTF8Encoding(false);
-        if (args.Length == 2 && args[0] == "--foreground-token")
+        if (args.Length is 2 or 3 && args[0] == "--foreground-token")
         {
+            // Troisieme argument facultatif : fenetre cible (hwnd). La fenetre active de Julien est notee des le jeton pris
+            // et lui est rendue a la fin, sous le jeton, si la cible tient encore le premier plan (ForegroundReturn).
+            var target = args.Length == 3 && long.TryParse(args[2], out var hwnd) ? (nint)hwnd : 0;
+            bool acquired = false;
             try
             {
                 // EOF cancels waiting and releases ownership when the caller dies.
@@ -44,12 +48,19 @@ static partial class Program
                 // Keep EOF monitoring on a worker so acquisition can proceed.
                 var abandoned = Task.Run(() => Console.In.ReadToEnd());
                 using var token = ForegroundToken.Acquire(args[1], abandoned);
-                Write(new { ok = true });
+                acquired = true;
+                var noted = Win32.GetForegroundWindow();
+                Write(new { ok = true, foreground = (long)noted });
                 Console.Out.Flush();
                 abandoned.GetAwaiter().GetResult();
+                if (target != 0)
+                {
+                    var state = ForegroundReturn.GiveBack(noted, target);
+                    try { Write(new { giveBack = state }); Console.Out.Flush(); } catch (IOException) { } // appelant deja parti
+                }
                 return 0;
             }
-            catch (Exception error) { Write(new { ok = false, error = error.GetType().Name, message = error.Message }); return 1; }
+            catch (Exception error) when (!acquired) { Write(new { ok = false, error = error.GetType().Name, message = error.Message }); return 1; }
         }
         if (args.Length == 2 && args[0] == "--stop-guard") return EmergencyStop.Guard(args[1]);
         // Processus des motifs UI Automation (voir Background.cs).
@@ -88,9 +99,24 @@ static partial class Program
         Console.Out.Flush();
         return code;
     }
+    // Vrai des qu'une entree a pu partir (RunAction, WM_COMMAND de menu) : avant, toute erreur d'une action precede
+    // l'entree.
+    [ThreadStatic] static bool InputStarted;
     static object Execute(JsonElement request)
     {
+        InputStarted = false;
         var op = Text(request, "operation");
+        try { return ExecuteRequest(request, op); }
+        catch (Exception error) when (!ReadOnlyOperations.Contains(op) && !InputStarted && error is not (EmergencyStopException or ActionRefusedException or JulienActiveException)
+            && request.TryGetProperty("windowId", out var w) && w.ValueKind == JsonValueKind.Number && !IsWindow((nint)w.GetInt64()))
+        {
+            // Fenetre fermee pendant la requete, avant toute entree : refus (rien n'a ete envoye), jamais un resultat
+            // inconnu, et jamais un repli physique vers une fenetre disparue.
+            throw new ActionRefusedException("Window closed during the request; nothing was sent: " + error.Message);
+        }
+    }
+    static object ExecuteRequest(JsonElement request, string op)
+    {
         var action = !ReadOnlyOperations.Contains(op);
         // Emergency stop: refuse every action before touching the window; inspection stays allowed.
         if (action) EmergencyStop.ThrowIfStopped();
@@ -107,7 +133,13 @@ static partial class Program
         var app = request.GetProperty("app").GetString() ?? "";
         if (!IsWindow(hwnd)) throw Refuse("Window no longer exists");
         GetWindowThreadProcessId(hwnd, out var pid);
-        using var process = Process.GetProcessById((int)pid);
+        if (pid == 0) throw Refuse("Window closed during the request; nothing was sent");
+        Process OpenProcess()
+        {
+            try { return Process.GetProcessById((int)pid); }
+            catch (ArgumentException) { throw Refuse("The window's process ended during the request; nothing was sent"); }
+        }
+        using var process = OpenProcess();
         if (Exclusion(process.ProcessName, hwnd) is { } refusal) throw Refuse(refusal);
         var actualApp = AppId(process);
         UiTree? full = null, identity = null;
@@ -191,6 +223,9 @@ static partial class Program
                 if (nodes[0].Disabled || target.Disabled) throw new ActionRefusedException("Target or its window is disabled (a modal dialog may be open)");
                 if (target.Password) throw new ActionRefusedException("Password controls require the dedicated supported workflow");
                 if (op == "secondary" && !target.Actions.Contains(Text(request, "action"))) throw new ActionRefusedException("Secondary action is not exposed");
+                // Visible d'abord (meme regle que les autres agents) : un element hors champ dont rien ne recoupe sa fenetre
+                // n'est jamais clique par cible ; le faire defiler, puis reobserver.
+                if (op == "click" && HiddenOffscreen(target, nodes[0])) throw new ActionRefusedException("Target is off-screen with no visible part in its window; scroll it into view and inspect again");
             }
             catch (Exception error) when (error is not (EmergencyStopException or ActionRefusedException or BackgroundNotApplicableException))
             {
@@ -213,6 +248,7 @@ static partial class Program
             if (n.Checked == true) tree.Append(" (checked)");
             if (n.Expanded == true) tree.Append(" (expanded)");
             if (n.Expanded == false) tree.Append(" (collapsed)");
+            if (n.Offscreen) tree.Append(" (offscreen)");
             tree.Append(' ').Append(Clean(n.Name));
             if (n.Value is { Length: > 0 }) tree.Append(" Value: ").Append(Clean(n.Value));
             if (n.ValueTruncated) tree.Append(" [value truncated]");
@@ -238,7 +274,7 @@ static partial class Program
             elements = nodes.Select(n => new { index = n.Index, depth = n.Depth * 2, role = n.Role, name = n.Name, automationId = n.AutomationId,
                 value = n.Value, valueTruncated = n.ValueTruncated, description = n.Description, disabled = n.Disabled, selected = n.Selected, @checked = n.Checked,
                 expanded = n.Expanded, focused = n.Focused, password = n.Password, actions = n.Actions, ancestors = n.Ancestors, runtimeId = n.RuntimeId,
-                nativeWindow = (long)n.NativeWindow, bounds = n.Bounds, flags = Array.Empty<string>() }).ToList() }; // avant la liberation de l'arbre
+                nativeWindow = (long)n.NativeWindow, bounds = n.Bounds, flags = n.Offscreen ? new[] { "offscreen" } : Array.Empty<string>() }).ToList() }; // avant la liberation de l'arbre
     }
 
     // Liste deroulante Win32/WinForms (classe COMBOBOX, hors CBS_SIMPLE) : l'etat ouvert est relu par CB_GETDROPPEDSTATE,
@@ -253,6 +289,16 @@ static partial class Program
             n.Actions.RemoveAll(a => a is "Expand" or "Collapse");
             n.Actions.Add(dropped != 0 ? "Collapse" : "Expand");
         }
+    }
+
+    // Hors champ (IsOffscreen) et sans aucune partie dans le rectangle de sa fenetre (racine) ; rectangles [x, y, l, h].
+    static bool HiddenOffscreen(Node target, Node root)
+    {
+        if (!target.Offscreen) return false;
+        if (target.Bounds.Length != 4 || root.Bounds.Length != 4) return true;
+        var (x, y, w, h) = (target.Bounds[0], target.Bounds[1], target.Bounds[2], target.Bounds[3]);
+        var (rx, ry, rw, rh) = (root.Bounds[0], root.Bounds[1], root.Bounds[2], root.Bounds[3]);
+        return x >= rx + rw || y >= ry + rh || x + w <= rx || y + h <= ry;
     }
 
     // La chaine relue (racine .. parent de la cible) doit etre exactement celle que la session a observee.

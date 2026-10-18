@@ -243,3 +243,29 @@ test('real guard in a test directory leaves the hotkey alone and writes the prot
   const code = await new Promise(resolve => guard.once('close', resolve));
   assert.equal(code, 0);
 });
+
+// --- Garde mort (crash) : relancé au point de contrôle de chaque action, pas seulement par status(). ---
+const until = async (condition, ms = 5000) => {
+  const deadline = Date.now() + ms;
+  while (!condition()) {
+    if (Date.now() > deadline) return false;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  return true;
+};
+test('a crashed guard is restarted by the next action checkpoint, and presence comes back', async t => {
+  const dir = await directory(t);
+  const { c, options } = clocks();
+  const stop = new EmergencyStop({ directory: dir, ...options });
+  t.after(() => stop.close());
+  const marker = path.join(dir, 'crash-once');
+  await writeFile(marker, '');
+  stop.startGuard(process.execPath, [fileURLToPath(new URL('./fixtures/guard.mjs', import.meta.url)), marker]);
+  assert.equal(stop.guardExpected, true);
+  assert.ok(await until(() => stop.guardState === 'exited'), 'le garde factice aurait dû planter');
+  assert.equal(stop.presence.available, false); // présence inconnue après le crash
+  c.mono += 4000; // au-delà de la relance bornée (HEARTBEAT_S)
+  stop.assertClear(); // contrôle d'une action : relance le garde mort
+  assert.notEqual(stop.guardState, 'exited');
+  assert.ok(await until(() => stop.presence.available), 'la présence aurait dû revenir avec le garde relancé');
+});
