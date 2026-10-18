@@ -20,7 +20,7 @@ Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/claude-windows-computer-use) ·
 [Codex](https://github.com/pironjulien/codex-windows-computer-use) ·
 [Antigravity](https://github.com/pironjulien/antigravity-windows-computer-use)),
-[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/antigravity-browser-use)),
+[NexusBrowser](https://julienpiron.fr/nexusbrowser/) ([repo](https://github.com/pironjulien/chrome-computer-use)),
 [NexusAndroid](https://julienpiron.fr/nexusandroid/) ([repo](https://github.com/pironjulien/android-computer-use)).
 Project page: [julienpiron.fr/nexuswindows](https://julienpiron.fr/nexuswindows/).
 
