@@ -28,6 +28,10 @@ try {
     & $dotnet publish (Join-Path $root 'native\NexusCodex.UIA.csproj') -c Release -o $nativeRoot `
         "-p:BaseIntermediateOutputPath=$work\build\obj\" "-p:BaseOutputPath=$work\build\bin\" --nologo -v q
     if ($LASTEXITCODE -or -not (Test-Path -LiteralPath (Join-Path $nativeRoot 'NexusCodex.UIA.exe'))) { throw 'Native helper build failed.' }
+    # "Agent at work" indicator frames rendered by the freshly built helper (nothing is shown on screen).
+    $env:NEXUS_FOREGROUND_EXE = Join-Path $nativeRoot 'NexusCodex.UIA.exe'
+    & $node --test (Join-Path $root 'tests\indicator.test.mjs')
+    if ($LASTEXITCODE) { throw 'Indicator rendering tests failed.' }
 
     if ($Full) {
         $env:NEXUS_FOREGROUND_EXE = Join-Path $nativeRoot 'NexusCodex.UIA.exe'

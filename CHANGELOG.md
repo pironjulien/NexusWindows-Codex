@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-10-20 — "Agent at work" indicator
+
+### Added
+- While an action runs (`act`, `actBatch`, `activate`; never an observation), a logo spins on itself in the
+  bottom-right corner of the bound window's screen with a breathing blue halo, and goes away 1.6 s after the last
+  action. Drawn by the emergency-stop guard (`native/BusyIndicator.cs`, commands `busy <hwnd>` / `idle`): always on
+  top, borderless, click-through, never activated, absent from the taskbar, excluded from screen captures.
+  `NEXUS_WINDOWS_INDICATOR=0` turns it off. Tests: `tests/indicator.test.mjs` (session wiring, guard commands, and the
+  native frames rendered by the built helper in `test.ps1`).
+
 ## [1.6.0] - 2026-10-20 — Bounded foreground interactions, hardened supply chain
 
 ### Added

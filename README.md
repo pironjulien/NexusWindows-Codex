@@ -147,6 +147,16 @@ A verified semantic click or secondary action can be saved as a recipe with its 
 the executable's metadata and one of the control structure. Any change forces a new inspection. No control number or
 pixel is ever replayed, and typed content is never stored.
 
+### Agent at work
+
+While an action runs (`act`, `actBatch`, `activate`; never an observation), a small logo spins on itself in the
+bottom-right corner of the bound window's screen, like a game loading screen, with a breathing blue halo. It goes away
+1.6 s after the last action. The emergency-stop guard, already alive for the whole REPL, draws it on the commands
+`busy <hwnd>` and `idle` (`native/BusyIndicator.cs`): a layered window that is always on top, borderless,
+click-through, never activated, absent from the taskbar and excluded from screen captures. Rendering is analytic
+(halo, shadow, coin) from `native/logo.png` decoded by GDI+, with no added dependency. `NEXUS_WINDOWS_INDICATOR=0`
+turns it off.
+
 ## Working alongside other agents
 
 This layer runs next to two other desktop agents on the same PC (a Claude MCP server,

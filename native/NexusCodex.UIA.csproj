@@ -7,4 +7,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>NexusCodex.UIA</AssemblyName>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Logo de l'indicateur « agent au travail » (BusyIndicator.cs), lu a cote de l'executable. -->
+    <None Include="logo.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

@@ -57,6 +57,12 @@ static partial class Program
             catch (Exception error) when (!acquired) { Write(new { ok = false, error = error.GetType().Name, message = error.Message }); return 1; }
         }
         if (args.Length == 2 && args[0] == "--stop-guard") return EmergencyStop.Guard(args[1]);
+        // Images de l'indicateur (BGRA premultiplie, bout a bout) pour les tests, sans rien afficher.
+        if (args.Length == 3 && args[0] == "--indicator-frames" && int.TryParse(args[1], out var diameter) && diameter is >= 24 and <= 512)
+        {
+            File.WriteAllBytes(args[2], BusyIndicator.RenderFrames(diameter).SelectMany(f => f).ToArray());
+            return 0;
+        }
         // Processus des motifs UI Automation (voir Background.cs).
         if (args.SequenceEqual(new[] { "--com-worker" })) return ComWorker.Run();
         if (args.SequenceEqual(new[] { "--server" }))

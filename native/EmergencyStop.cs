@@ -97,9 +97,16 @@ static class EmergencyStop
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
         // EOF (client closed or died) ends the guard. "press" simulates the hotkey for tests in a test directory.
+        // "busy <hwnd>" / "idle" : logo « agent au travail » pendant les actions de la session (BusyIndicator.cs).
         string? line;
         while ((line = Console.ReadLine()) != null)
-            if (line.Trim() == "press" && TestDirectory) Pressed();
+        {
+            var command = line.Trim();
+            if (command == "press" && TestDirectory) Pressed();
+            else if (command.StartsWith("busy", StringComparison.Ordinal))
+                BusyIndicator.Busy(long.TryParse(command.AsSpan(4).Trim(), out var hwnd) ? (nint)hwnd : 0);
+            else if (command == "idle") BusyIndicator.Idle();
+        }
         return 0;
     }
 
