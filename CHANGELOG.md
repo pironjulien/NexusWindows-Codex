@@ -7,10 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-20 — Bounded foreground interactions, hardened supply chain
+
+### Added
+- **Bounded foreground interaction** (`beginInteraction`, 100 ms to 30 s): one short observe → act → observe
+  sequence on transient menus and canvases keeps the same foreground lease, then gives the foreground back; never an
+  open-ended lease, refused while the user is active or after the emergency stop.
+- Shared guard-rail policy v2 (nexus-shared): confirmation tied to the exact action, detection of instructions aimed
+  at an AI in what is read on screen; currency amounts recognised in any notation (« 4,99 € » = « 4.99 EUR »).
+- OpenSSF Scorecard workflow and badge; Dependabot for GitHub Actions and npm (7-day cooldown).
+
 ### Changed
+- The policy file now travels with every request to the native helper, so the guardrails also hold in the Codex
+  REPL runtime (no `process` global); the helper keeps its Windows environment there.
+- GitHub Actions pinned by commit SHA, checkout without persisted credentials (zizmor clean).
 - Repository renamed to `pironjulien/NexusWindows-Codex`; GitHub redirects the old address.
-- Shared guard-rail policy updated (nexus-shared 6d82bbb): erasing, resetting or formatting the whole device now
-  needs confirmation too; "erase everything" counts only on a reset screen.
+- Erasing, resetting or formatting the whole device now needs confirmation too; "erase everything" counts only on a
+  reset screen.
 
 ## [1.5.0] - 2026-10-18 — One shared guardrail policy
 

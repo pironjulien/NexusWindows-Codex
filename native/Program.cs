@@ -82,6 +82,14 @@ static partial class Program
             var request = json.RootElement;
             requestId = Text(request, "requestId");
             if (server && !Guid.TryParse(requestId, out _)) throw new InvalidOperationException("Request identity is required");
+            if (request.TryGetProperty("policyFile", out var policy))
+            {
+                var file = policy.GetString();
+                if (string.IsNullOrWhiteSpace(file) || !Path.IsPathFullyQualified(file))
+                    throw new InvalidDataException("Policy path must be absolute");
+                // Les enfants COM heritent aussi de ce chemin, avec l'environnement Windows complet.
+                Environment.SetEnvironmentVariable("NEXUS_GARDE_FOUS", file);
+            }
             result = Execute(request);
         }
         catch (Exception error)

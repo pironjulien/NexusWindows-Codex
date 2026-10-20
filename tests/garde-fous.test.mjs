@@ -83,6 +83,7 @@ function provider({ title = 'Messagerie', tree = TREE, focus = 2 } = {}) {
     windows: [{ id: 10, app: 'test!Mail', title }],
     async list_windows() { return this.windows; },
     async get_window({ id }) { return this.windows.find(w => w.id === id); },
+    async activate_window() {},
     async get_window_state({ window, include_text, include_screenshot }) {
       return { window, accessibility: include_text ? { tree, focused_element: `${focus} édition Message ID: message` } : null,
         screenshots: include_screenshot ? [{ id: 'shot', width: 400, height: 300, originX: 100, originY: 200 }] : [] };

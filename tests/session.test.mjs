@@ -9,6 +9,16 @@ import { parseTree, uniqueElement, structureHash, checkExpectation, digest } fro
 
 const button = { automationId: 'go', role: 'button' };
 const expectDone = { selector: { automationId: 'status' }, field: 'value', equals: 'Done' };
+
+test('activation captures its target before returning the foreground', async () => {
+  const window={id:7,app:'fixture',title:'Test'};let held=false,captured=false,returned=false;
+  const sky={target:'windows',async list_windows(){return [window]},async get_window(){return window},
+    async activate_window(){assert.equal(held,true)},
+    async get_window_state(){assert.equal(held,true);captured=true;return {window,accessibility:{tree:'0 window Test'},screenshots:[]}}};
+  const native={async withForeground(purpose,run){held=true;try{return await run()}finally{held=false;returned=true}}};
+  const session=new WindowsSession(sky,{native});
+  try{await session.bind({id:7});const observation=await session.activate();assert.equal(captured,true);assert.equal(returned,true);assert.equal(observation.window.id,7)}finally{await session.close()}
+});
 test('foreground contention prevents physical input and reports a deferred outcome', async t => {
   const { session, sky, observation } = await setup(t, { native: {
     async withForeground() { throw Object.assign(Error('Other agent holds foreground; action deferred'), { deferred: true }); },
@@ -16,6 +26,92 @@ test('foreground contention prevents physical input and reports a deferred outco
   await assert.rejects(session.act(observation, { kind: 'click', selector: button }), /action deferred/);
   assert.equal(sky.calls.length, 0);
   assert.equal(session.metrics()[0].status, 'deferred');
+});
+
+test('a bounded interaction keeps transient menus under one foreground lease', async t => {
+  let held = false, leases = 0;
+  const { session, sky } = await setup(t, { native: {
+    async withForeground(_, run, options) { leases++; held = true; try { return await run(); } finally { held = false; options.onRelease?.('restored'); } },
+  } });
+  let activations = 0;
+  sky.activate_window = async () => { assert.equal(held, true); activations++; };
+  sky.click = async input => { assert.equal(held, true); sky.calls.push(input); sky.done = !sky.done; };
+  let observation = await session.beginInteraction();
+  assert.equal(held, true);
+  let result = await session.act(observation, { kind: 'click', screenshotId: 'shot-1', point: { x: 10, y: 10 }, refresh: 'both', expect: expectDone });
+  assert.equal(result.status, 'verified');
+  assert.equal(result.foregroundReturned, 'interaction-held');
+  observation = result.observation;
+  result = await session.act(observation, { kind: 'click', screenshotId: 'shot-1', point: { x: 20, y: 20 }, expect: { ...expectDone, equals: 'Ready' } });
+  assert.equal(result.status, 'verified');
+  assert.equal(leases, 1);
+  assert.equal(activations, 1);
+  const ended = await session.endInteraction();
+  assert.equal(held, false);
+  assert.equal(ended.foregroundReturned, 'restored');
+  assert.equal(sky.calls.length, 2);
+  await assert.rejects(session.act(result.observation, { kind: 'key', key: 'a' }), /observation/i);
+});
+
+test('an interaction expires and invalidates its old coordinates without input', async t => {
+  let held = false;
+  const { session, sky } = await setup(t, { native: {
+    async withForeground(_, run) { held = true; try { return await run(); } finally { held = false; } },
+  } });
+  const observation = await session.beginInteraction({ durationMs: 100 });
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(held, false);
+  assert.deepEqual(await session.endInteraction(), { status: 'inactive' });
+  await assert.rejects(session.act(observation, { kind: 'click', screenshotId: 'shot-1', point: { x: 10, y: 10 } }), /observation/i);
+  assert.equal(sky.calls.length, 0);
+});
+
+test('Julien taking input back ends the interaction and releases its lease', async t => {
+  let active = false, held = false;
+  const stop = { assertClear() {}, guardExpected: true, presence: {
+    available: true, source: 'raw-input', idleMs: () => 10000, now: () => 10, since: () => active,
+    async waitForPause() { return { waitedMs: 0 }; },
+  } };
+  const { session, sky } = await setup(t, { emergencyStop: stop, native: {
+    async withForeground(_, run) { held = true; try { return await run(); } finally { held = false; } },
+  } });
+  const observation = await session.beginInteraction();active = true;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(held, false);
+  await assert.rejects(session.act(observation, { kind: 'key', key: 'a' }), /observation/i);
+  assert.equal(sky.calls.length, 0);
+});
+
+test('the emergency stop also releases an idle foreground interaction', async t => {
+  let stopped = false, held = false;
+  const stop = { assertClear() { if (stopped) throw Object.assign(Error('stop requested'), { emergencyStop: true }); } };
+  const { session, sky } = await setup(t, { emergencyStop: stop, native: {
+    async withForeground(_, run) { held = true; try { return await run(); } finally { held = false; } },
+  } });
+  await session.beginInteraction();stopped = true;
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.equal(held, false);
+  assert.equal(sky.calls.length, 0);
+});
+
+test('unknown input releases an interaction without replaying the action', async t => {
+  let held = false;
+  const { session, sky } = await setup(t, { native: {
+    async withForeground(_, run) { held = true; try { return await run(); } finally { held = false; } },
+  } });
+  const observation = await session.beginInteraction();sky.failInput = true;
+  await assert.rejects(session.act(observation, { kind: 'click', screenshotId: 'shot-1', point: { x: 10, y: 10 } }), /unknown/i);
+  assert.equal(held, false);
+  assert.equal(sky.calls.length, 1);
+});
+
+test('an interaction cannot change its bound window or weaken its duration bound', async t => {
+  const { session } = await setup(t);
+  await assert.rejects(session.beginInteraction({ durationMs: 30001 }), /durationMs/);
+  await session.beginInteraction();
+  await assert.rejects(session.bind({ id: 10 }), /interaction/i);
+  await assert.rejects(session.beginInteraction(), /interaction/i);
+  await session.close();
 });
 
 test('foreground lease surrounds activation, input and Sky semantic values, but not reads', async t => {

@@ -486,6 +486,15 @@ test('every foreground action hands its target window to the token helper and re
   assert.equal(s.calls.length, 1);
 });
 
+test('physical input reactivates its target inside the lease before sending a click', async t => {
+  let held=false;const order=[];
+  const {session,sky:s,observation}=await setup(t,{native:{async withForeground(_,run){held=true;try{return await run()}finally{held=false}}}});
+  s.activate_window=async ({window})=>{assert.equal(held,true);assert.equal(window.id,10);order.push('activate')};
+  const originalClick=s.click.bind(s);s.click=async input=>{assert.equal(held,true);order.push('click');return originalClick(input)};
+  await session.act(observation,{kind:'click',selector:go,expect:expectDone});
+  assert.deepEqual(order,['activate','click']);assert.equal(held,false);
+});
+
 test('the token transport passes the target window and reads the give-back report, also after a failed action', async t => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-token-'));
   t.after(() => rm(root, { recursive: true, force: true }));

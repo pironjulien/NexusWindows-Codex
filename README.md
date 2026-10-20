@@ -2,6 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/pironjulien/NexusWindows-Codex)](https://github.com/pironjulien/NexusWindows-Codex/releases)
 [![Tests](https://github.com/pironjulien/NexusWindows-Codex/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusWindows-Codex/actions/workflows/tests.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pironjulien/NexusWindows-Codex/badge)](https://scorecard.dev/viewer/?uri=github.com/pironjulien/NexusWindows-Codex)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](package.json)
 [![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](native)
@@ -18,7 +19,7 @@ and physical input, and adds a local .NET helper that acts **in the background f
 Automation without focus, so the user keeps their mouse, keyboard and foreground window. Every action is checked
 against an explicit postcondition.
 
-Version 1.5.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+Version 1.6.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·

@@ -246,9 +246,9 @@ test('live background validation on self-created covered windows', { skip: !exec
       const formule = { name: 'Formule', role: 'combobox' };
       const resultat = { automationId: 'resultat' };
       const valider = { name: 'Valider', role: 'button' };
-      const expected = 'Résultat : Nom=Julien;Email=julien@exemple.fr;Ville=Paris;Accepter=oui;Formule=Bravo;Envois=1';
+      const expected = 'Résultat : Nom=Julien;Email=julien@example.com;Ville=Paris;Accepter=oui;Formule=Bravo;Envois=1';
       const steps = [
-        ...[['Nom', 'Julien'], ['Email', 'julien@exemple.fr'], ['Ville', 'Paris']].map(([n, v]) => ({ kind: 'setValue', selector: field(n), value: v, expect: { selector: field(n), field: 'value', equals: v } })),
+        ...[['Nom', 'Julien'], ['Email', 'julien@example.com'], ['Ville', 'Paris']].map(([n, v]) => ({ kind: 'setValue', selector: field(n), value: v, expect: { selector: field(n), field: 'value', equals: v } })),
         { kind: 'click', selector: { name: 'Accepter', role: 'checkbox' }, expect: { selector: { name: 'Accepter', role: 'checkbox' }, field: 'checked', equals: true } },
         // WPF : d'abord un choix direct (liste fermée, dépliée puis repliée par le helper), puis le parcours du banc.
         ...(family === 'wpf' ? [{ kind: 'select', selector: formule, option: 'Alpha', expect: { selector: formule, field: 'value', equals: 'Alpha' } }] : []),
