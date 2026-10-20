@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- CI: bump pinned GitHub Actions (actions/checkout v7.0.1, actions/setup-node v7.1.0, actions/setup-dotnet v6.0.0).
+
 ## [1.7.0] - 2026-10-20 — "Agent at work" indicator
 
 ### Added
