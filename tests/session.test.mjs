@@ -32,6 +32,7 @@ test('a bounded interaction keeps transient menus under one foreground lease', a
   let held = false, leases = 0;
   const { session, sky } = await setup(t, { native: {
     async withForeground(_, run, options) { leases++; held = true; try { return await run(); } finally { held = false; options.onRelease?.('restored'); } },
+    inspect: boundsInspect,
   } });
   let activations = 0;
   sky.activate_window = async () => { assert.equal(held, true); activations++; };
@@ -98,6 +99,7 @@ test('unknown input releases an interaction without replaying the action', async
   let held = false;
   const { session, sky } = await setup(t, { native: {
     async withForeground(_, run) { held = true; try { return await run(); } finally { held = false; } },
+    inspect: boundsInspect,
   } });
   const observation = await session.beginInteraction();sky.failInput = true;
   await assert.rejects(session.act(observation, { kind: 'click', screenshotId: 'shot-1', point: { x: 10, y: 10 } }), /unknown/i);
@@ -158,6 +160,9 @@ function provider() {
     async press_key(input) { this.calls.push(input); this.done = true; },
   };
 }
+// Lecture native factice d'une fenêtre avec son rectangle : un geste en coordonnées est jugé sur l'élément sous le point
+// (garde-fous) ; sans aucun rectangle, il est refusé.
+const boundsInspect = async () => ({ elements: [{ index: 0, depth: 0, role: 'window', name: 'Test', ancestors: [], bounds: [-10000, -10000, 20000, 20000] }] });
 async function setup(t, options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-cu-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -308,7 +313,7 @@ test('already satisfied condition does not claim a successful action', async t =
   assert.equal(r.performed, false); assert.equal(r.verified, false); assert.equal(sky.calls.length, 0);
 });
 test('coordinates require the inspected screenshot and valid bounds', async t => {
-  const { session, sky, observation } = await setup(t);
+  const { session, sky, observation } = await setup(t, { native: { withForeground: async (_, action) => action(), inspect: boundsInspect } });
   await assert.rejects(session.act(observation, { kind: 'click', point: { x: 20, y: 20 }, screenshotId: 'made-up' }), /screenshotId/);
   const image = await session.observe({ mode: 'image' });
   assert.equal(JSON.stringify(image).includes('private-pixels'), false);
@@ -567,7 +572,7 @@ test('a truncated document can prove a substring but never exact equality', () =
 });
 
 test('image-only observation cannot short-circuit a requested disappearance', async t => {
-  const { session, sky } = await setup(t);
+  const { session, sky } = await setup(t, { native: { withForeground: async (_, action) => action(), inspect: boundsInspect } });
   const obs = await session.observe({ mode: 'image' });
   const result = await session.act(obs, {
     kind: 'click', point: { x: 20, y: 20 }, screenshotId: 'shot-1',

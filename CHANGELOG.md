@@ -7,8 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-10-20 — Accord bound to the exact action
+
 ### Changed
+- **Outward gestures need the user's accord bound to the EXACT action** (shared guard-rail policy v2, same rule as
+  NexusWindows for Claude and for Antigravity). Sending, calling, paying, publishing or transferring (or Validate/OK in
+  a payment window) needs `confirm:true` AND `accord:"<token>"`. The first try is refused before any input with a
+  summary of the exact action and a single-use token (10 min): gesture, triggers, recipients first and in full
+  (recipient fields such as To, Cc, À, E-mail, IBAN, and the chips inside or next to them), editable field values
+  (never a password), the body document near the trigger, typed text in full with each line break shown (⏎) and
+  counted, the open conversation (title without its unread counter, headings, selected list, grid or tab item), the
+  application and window. Any change voids the token. Local destructions (uninstall, format, empty the trash…) keep
+  `confirm:true` alone. A text read in a window, page or message never authorizes anything.
+- The token is burned right before input and given back when the input is refused before anything was sent (focus,
+  user presence, emergency stop), so a yes is never lost for nothing; two calls can never use it both.
+- Every input path is judged: selector and coordinate clicks, drag (start and end points), Enter, Ctrl+Enter, Space,
+  Alt+letter, Tab followed by Space or Enter, typed line breaks and tabs, menu commands, secondary actions, batches and
+  recipes. Enter in a field widens to the nearest ancestor holding a button with a word to confirm (an editor nested
+  far from its send bar). A coordinate gesture with no element bounds under the point is judged on every trigger of
+  the window, with every document bound; with nothing read at all it is refused.
 - CI: bump pinned GitHub Actions (actions/checkout v7.0.1, actions/setup-node v7.1.0, actions/setup-dotnet v6.0.0).
+- Reviewed adversarially in six rounds; 162 tests.
+
+### Known limits
+- No provenance warning yet (a recipient that appears in a text read is not flagged here; the token stays bound to the
+  exact action).
 
 ## [1.7.0] - 2026-10-20 — "Agent at work" indicator
 
