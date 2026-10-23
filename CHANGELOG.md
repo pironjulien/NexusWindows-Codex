@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-10-23 — Family naming, release with provenance
+
+### Changed
+- Same version as NexusWindows for Claude (now published as `nexus-windows-claude`) and NexusWindows for
+  Antigravity; the README family table points to the new Claude package.
+- Published to npm from GitHub Actions through trusted publishing, with provenance (3.0.0 was published by hand).
+
 ## [3.0.0] - 2026-10-23 — Standalone MCP server, no Sky
 
 The three NexusWindows tools (Claude, Codex, Antigravity) move to 3.0.0 together: one-command install from a package

@@ -22,7 +22,7 @@ capture of covered windows, Win32 messages and UI Automation patterns without fo
 keyboard as the last resort, under a shared foreground token. Every action is judged from the application's real
 state, and a batch needs an explicit postcondition per step. It also ships as a Codex skill that layers the same session over Codex's Computer Use API (`@oai/sky`).
 
-Version 3.0.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+Version 3.0.1 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·
@@ -51,8 +51,8 @@ promise: the user keeps their mouse, keyboard and foreground window, and every a
 
 | | Claude | Codex | Antigravity |
 |---|---|---|---|
-| Install | `uvx --python 3.14 nexus-windows` | `npx -y nexus-windows-codex` | `uvx --python 3.14 nexus-windows-antigravity` |
-| Package | [PyPI](https://pypi.org/project/nexus-windows/) | [npm](https://www.npmjs.com/package/nexus-windows-codex) | [PyPI](https://pypi.org/project/nexus-windows-antigravity/) |
+| Install | `uvx --python 3.14 nexus-windows-claude` | `npx -y nexus-windows-codex` | `uvx --python 3.14 nexus-windows-antigravity` |
+| Package | [PyPI](https://pypi.org/project/nexus-windows-claude/) | [npm](https://www.npmjs.com/package/nexus-windows-codex) | [PyPI](https://pypi.org/project/nexus-windows-antigravity/) |
 | Tools | `windows` `look` `act` `launch` `window`, plus `notifications` and `logs` | `windows` `look` `act` `launch` `window` | `windows` `look` `act` `launch` `window` |
 | Repository | [NexusWindows-Claude](https://github.com/pironjulien/NexusWindows-Claude) | [NexusWindows-Codex](https://github.com/pironjulien/NexusWindows-Codex) | [NexusWindows-Antigravity](https://github.com/pironjulien/NexusWindows-Antigravity) |
 
