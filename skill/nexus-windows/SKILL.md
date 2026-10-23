@@ -1,6 +1,6 @@
 ---
 name: nexus-windows
-description: Operate Windows desktop apps for Julien with NexusCodex, using Codex Computer Use plus native UI Automation, current semantic selectors, verified results and application memory. Use for Windows app interaction and desktop UI validation; web pages stay in the Codex integrated browser and its filechooser API.
+description: Operate Windows desktop apps for Julien with NexusCodex, using Codex Computer Use plus native UI Automation, current semantic selectors, verified results and application memory. Default for ALL Windows desktop app work, before plain Computer Use: use the nexus-windows MCP tools (windows, look, act, launch, window) when they are available; otherwise this skill runs the same session in the Node REPL over Computer Use. Use for Windows app interaction and desktop UI validation; web pages stay in the Codex integrated browser and its filechooser API.
 ---
 
 # NexusCodex Windows

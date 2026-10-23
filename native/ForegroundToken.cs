@@ -88,7 +88,9 @@ static class ForegroundReturn
     // `input` : LastInput note avec la fenetre ; relu avant chaque geste de restitution et pendant chaque attente. Julien
     // (ou un pair) a touche clavier ou souris entre-temps : son choix est garde, rien n'est remis devant (relecture de
     // Codex, 21/10 : la seconde tentative pouvait tomber au milieu de sa saisie).
-    public static string GiveBack(nint noted, nint target, uint? input = null)
+    // `sameProcess` : la cible peut etre une AUTRE fenetre du processus de Julien (lancement qui ouvre un document dans
+    // son instance) ; sa fenetre est alors rendue aussi (relecture de Codex du 23/10).
+    public static string GiveBack(nint noted, nint target, uint? input = null, bool sameProcess = false)
     {
         // Sans reference donnee (repli UIA, bail physique) : saisie notee a l'entree, ce qui couvre la restitution elle-meme
         // sans confondre les entrees precedentes de l'agent avec Julien (relecture de Codex, 21/10).
@@ -99,7 +101,7 @@ static class ForegroundReturn
         var fg = Win32.GetForegroundWindow();
         if (fg == noted) return "not-taken";
         var targetPid = Win32.ProcessOf(target);
-        if (Win32.ProcessOf(noted) == targetPid) return "not-taken"; // Julien etait deja dans l'application cible
+        if (!sameProcess && Win32.ProcessOf(noted) == targetPid) return "not-taken"; // Julien etait deja dans l'application cible
         if (fg == 0) return "not-taken";
         if (Win32.ProcessOf(fg) != targetPid) return "kept-by-julien";
         if (!Restorable(noted)) return "none";

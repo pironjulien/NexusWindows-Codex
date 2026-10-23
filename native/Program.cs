@@ -152,6 +152,8 @@ static partial class Program
                 cursor = new { x = probe.Cursor.X, y = probe.Cursor.Y }, idleMs = unchecked(Win32.GetTickCount() - probe.LastInput) };
         }
         if (op == "windows") return ListWindows(request.GetProperty("processId").GetInt32());
+        if (op == "launch") return Launch(request.GetProperty("target").GetString() ?? "",
+            request.TryGetProperty("quietMs", out var lq) && lq.ValueKind == JsonValueKind.Number ? lq.GetInt32() : null);
         if (op == "openSettings") return OpenSettings(request.GetProperty("uri").GetString() ?? "",
             request.TryGetProperty("quietMs", out var oq) && oq.ValueKind == JsonValueKind.Number ? oq.GetInt32() : null);
         // Un refus avant toute entree n'est jamais un resultat inconnu : aucune entree n'a ete envoyee.
@@ -204,6 +206,7 @@ static partial class Program
             // jeton apres la mise au premier plan.
             if (op == "physical" && !request.TryGetProperty("selector", out _)) return Physical.Act(hwnd, request, () => InputStarted = true);
             if (op == "activate") return Physical.Activate(hwnd, () => InputStarted = true);
+            if (op == "close") return CloseWindow(hwnd, () => InputStarted = true);
             if (op == "navigateFolder") return Explorer.Navigate(hwnd, Text(request, "path"), () => InputStarted = true);
             if (action && !ActionOperations.Contains(op)) throw new InvalidOperationException("Unknown native operation");
             if (op == "inspect")
@@ -547,8 +550,179 @@ static partial class Program
         }
         catch (ArgumentException) { return new { ok = true, state = "gone" }; }
     }
+    // Inventaire du bureau sans Sky (serveur MCP autonome) : fenetres d'application de premier niveau, visibles et non
+    // masquees par DWM, comme la barre des taches (pas de fenetre outil sans WS_EX_APPWINDOW, pas de fenetre possedee).
+    // Une fenetre UWP est hebergee par ApplicationFrameHost : son application est celle de la CoreWindow enfant.
+    static object ListAllWindows() => new { ok = true, windows = AppWindows().Select(w => new { id = w.Id, app = w.App, title = w.Title, pid = w.Pid }) };
+    static List<(long Id, string App, string Title, long Pid)> AppWindows()
+    {
+        const int GWL_EXSTYLE = -20, WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000;
+        var windows = new List<(long, string, string, long)>();
+        var apps = new Dictionary<uint, (string App, string Name)?>();
+        (string App, string Name)? Identity(uint pid)
+        {
+            if (apps.TryGetValue(pid, out var known)) return known;
+            (string, string)? found = null;
+            try { using var p = Process.GetProcessById((int)pid); found = (AppId(p), p.ProcessName); }
+            catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { }
+            return apps[pid] = found;
+        }
+        Win32.EnumWindows((hwnd, _) =>
+        {
+            if (!Win32.IsWindowVisible(hwnd) || Win32.IsCloaked(hwnd)) return true;
+            var ex = Win32.GetWindowLongW(hwnd, GWL_EXSTYLE);
+            var owned = Win32.GetWindow(hwnd, Win32.GW_OWNER) != 0;
+            if ((ex & WS_EX_APPWINDOW) == 0 && ((ex & WS_EX_TOOLWINDOW) != 0 || owned)) return true;
+            var cls = Win32.ClassName(hwnd);
+            var title = Win32.Title(hwnd);
+            if (IgnoredClasses.Contains(cls) || title.Length == 0) return true;
+            var pid = Win32.ProcessOf(hwnd);
+            if (Identity(pid) is not { } identity) return true;
+            if (identity.Name.Equals("ApplicationFrameHost", StringComparison.OrdinalIgnoreCase))
+            {
+                var core = Win32.FindWindowExW(hwnd, 0, "Windows.UI.Core.CoreWindow", null);
+                if (core != 0 && Identity(Win32.ProcessOf(core)) is { } content) identity = content;
+            }
+            if (GardeFous.BlockReason(identity.Name, cls) == null) windows.Add(((long)hwnd, identity.App, title, (long)pid));
+            return true;
+        }, 0);
+        return windows;
+    }
+    // Lancement sans Sky : application (nom, chemin, AUMID), dossier ou document, par le shell, sous le jeton commun ; le
+    // premier plan est rendu chaque fois qu'une autre fenetre le prend (nouvelle, ou instance deja ouverte qui recoit le
+    // document), jusqu'a la fin. Adresses : ms-settings: seules (une autre adresse peut appeler, envoyer ou payer).
+    // Resultat : les nouvelles fenetres d'application, stables 600 ms et relues a la fin. Une fenetre n'est attribuee au
+    // lancement que sur preuve (processus demarre, ou processus ne apres le lancement qui est l'application visee) ;
+    // sinon elle est rendue comme candidate et l'issue reste inconnue (relectures de Codex du 23/10).
+    static object Launch(string target, int? quietMs)
+    {
+        target = target.Trim();
+        if (target.Length == 0) throw new ActionRefusedException("Nothing to launch; nothing was launched");
+        if (target.StartsWith("ms-settings:", StringComparison.OrdinalIgnoreCase)) return OpenSettings(target, quietMs);
+        // Chemin absolu selon Windows (lecteur, UNC avec \ ou /) : classification de .NET, pas un sous-ensemble regex.
+        var isPath = System.IO.Path.IsPathFullyQualified(target);
+        if (!isPath && System.Text.RegularExpressions.Regex.IsMatch(target, @"^[A-Za-z][A-Za-z0-9+.-]*:"))
+            throw new ActionRefusedException("Only ms-settings: addresses are launched; nothing was launched");
+        // AUMID d'une application du Store (« Microsoft.Paint_8wekyb3d8bbwe!App ») : par le dossier Applications du shell.
+        var aumid = !isPath && target.Contains('!') && !target.Contains('\\') && !target.Contains('/');
+        // Hors chemin absolu et AUMID, seul un nom d'application nu est accepte (« notepad », « winword.exe ») : un chemin
+        // relatif, un nom de fichier ou un nom que Windows normaliserait (point ou espace final) serait resolu depuis le
+        // dossier courant du helper, donc ambigu ; refuse, un chemin absolu est demande (relectures de Codex du 23/10).
+        if (!isPath && !aumid && !System.Text.RegularExpressions.Regex.IsMatch(target, @"^[A-Za-z0-9_-]+(\.exe)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            throw new ActionRefusedException("Give an absolute path for a file or folder (or an application name); nothing was launched");
+        var start = aumid ? @"shell:AppsFolder\" + target : target;
+        // Application visee : executable (nom ou chemin .exe) ou AUMID. Une application interdite (gestionnaire de mots de
+        // passe) est refusee avant tout lancement ; un document ou un dossier n'est jamais juge sur son nom de fichier.
+        var isExe = !aumid && (!isPath || target.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        var stem = isExe ? System.IO.Path.GetFileNameWithoutExtension(target) : "";
+        var exePath = isExe && isPath ? System.IO.Path.GetFullPath(target) : null;
+        var names = new List<string>();
+        if (isExe) names.Add(stem);
+        if (aumid)
+        {
+            // « AgileBits.1Password_xxx!App » : nom du paquet entier et sans editeur, compares aux processus interdits.
+            var package = target.Split('!')[0].Split('_')[0];
+            names.Add(package);
+            names.Add(package.Split('.').Last());
+        }
+        foreach (var name in names)
+            if (name.Length > 0 && GardeFous.BlockReason(name, "") is { } blocked) throw new ActionRefusedException(blocked + "; nothing was launched");
+        using var token = ForegroundToken.Acquire("launch an application");
+        JulienPause.ThrowIfActive(quietMs);
+        EmergencyStop.ThrowIfStopped();
+        // Inventaire pris sous le jeton, juste avant le lancement : une fenetre apparue pendant l'attente du jeton n'est
+        // jamais prise pour celle du lancement.
+        var before = new HashSet<long>(AppWindows().Select(w => w.Id));
+        var probe = Win32.Probe();
+        string giveBack = "none";
+        void ReturnIfTaken()
+        {
+            var fg = Win32.GetForegroundWindow();
+            // Meme une autre fenetre du processus de Julien (document ouvert dans son instance) : sa fenetre lui est rendue.
+            if (fg != 0 && fg != probe.Foreground) giveBack = ForegroundReturn.GiveBack(probe.Foreground, fg, probe.LastInput, sameProcess: true);
+        }
+        long startedPid = 0;
+        var launchedAt = DateTime.Now;
+        // Attribution prouvee seulement : fenetre du processus demarre, ou d'un processus NE APRES le lancement et qui est
+        // bien l'application visee (meme chemin d'executable, meme nom de processus pour un nom nu, meme AUMID). Un nom de
+        // fichier ou un titre ne prouve rien : document, dossier ou autre concordance restent des candidates.
+        bool Attributed((long Id, string App, string Title, long Pid) w)
+        {
+            if (startedPid != 0 && w.Pid == startedPid) return true;
+            if (!isExe && !aumid) return false;
+            try
+            {
+                using var p = Process.GetProcessById((int)w.Pid);
+                if (p.StartTime < launchedAt.AddMilliseconds(-50)) return false;
+                if (aumid) return w.App.Equals(target, StringComparison.OrdinalIgnoreCase);
+                if (exePath != null) return w.App.Equals("process:" + exePath, StringComparison.OrdinalIgnoreCase);
+                return p.ProcessName.Equals(stem, StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return false; }
+        }
+        List<(long Id, string App, string Title, long Pid)> found = new();
+        bool stable = false;
+        try
+        {
+            InputStarted = true;
+            try
+            {
+                using var started = Process.Start(new ProcessStartInfo(start) { UseShellExecute = true });
+                try { if (started != null) startedPid = started.Id; } catch (InvalidOperationException) { }
+            }
+            catch (System.ComponentModel.Win32Exception error) { throw new ActionRefusedException("Nothing to launch at this name or path (" + error.Message + "); nothing was launched"); }
+            var clock = Stopwatch.StartNew();
+            string seen = ""; long seenAt = 0;
+            while (clock.ElapsedMilliseconds < 15000)
+            {
+                ReturnIfTaken();
+                var fresh = AppWindows().Where(w => !before.Contains(w.Id)).ToList();
+                var key = string.Join(",", fresh.Select(w => $"{w.Id}:{w.Pid}"));
+                if (key != seen) { seen = key; seenAt = clock.ElapsedMilliseconds; found = fresh; }
+                if (fresh.Count > 0 && clock.ElapsedMilliseconds - seenAt >= 600) { stable = true; break; }
+                Thread.Sleep(50);
+            }
+        }
+        finally { ReturnIfTaken(); }
+        // Relecture finale : chaque fenetre encore la, du meme processus (un HWND recycle n'est jamais garde).
+        if (stable)
+        {
+            var now = AppWindows().ToDictionary(w => w.Id);
+            stable = found.All(w => now.TryGetValue(w.Id, out var again) && again.Pid == w.Pid);
+        }
+        var mine = stable ? found.Where(Attributed).ToList() : new();
+        var candidates = found.Where(w => !mine.Contains(w)).ToList();
+        object Shape((long Id, string App, string Title, long Pid) w) => new { id = w.Id, app = w.App, title = w.Title, pid = w.Pid,
+            // Preuve de l'attribution : « process » (processus rendu par le shell) ou « application » (application visee,
+            // nee apres la demande : une autre instance lancee au meme moment pourrait etre prise pour elle).
+            proof = mine.Contains(w) ? (startedPid != 0 && w.Pid == startedPid ? "process" : "application") : null };
+        return new { ok = true, opened = mine.Count > 0 ? (bool?)true : null,
+            windows = mine.Select(Shape), candidates = candidates.Select(Shape), foregroundReturned = giveBack };
+    }
+    // Fermeture : WM_CLOSE poste une seule fois (jamais rejoue), puis relu 3 s : fermee, masquee, ou encore ouverte avec
+    // la fenetre qu'elle a ouverte (enregistrer ?) a regarder.
+    static object CloseWindow(nint hwnd, Action started)
+    {
+        started();
+        if (!Win32.PostMessageW(hwnd, 0x0010, 0, 0)) throw new ActionRefusedException("The close message could not be posted; nothing was sent");
+        var clock = Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < 3000)
+        {
+            if (!IsWindow(hwnd)) return new { ok = true, state = "closed" };
+            Thread.Sleep(50);
+        }
+        if (!Win32.IsWindowVisible(hwnd)) return new { ok = true, state = "hidden" };
+        var prompts = new List<object>();
+        Win32.EnumWindows((h, _) =>
+        {
+            if (Win32.IsWindowVisible(h) && Win32.GetWindow(h, Win32.GW_OWNER) == hwnd) prompts.Add(new { id = (long)h, title = Win32.Title(h) });
+            return true;
+        }, 0);
+        return new { ok = true, state = "open", prompts };
+    }
     static object ListWindows(int processId)
     {
+        if (processId == 0) return ListAllWindows();
         using var process = Process.GetProcessById(processId);
         var app = AppId(process);
         var windows = new List<object>();

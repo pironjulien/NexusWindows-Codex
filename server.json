@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.pironjulien/nexus-windows-codex",
+  "title": "NexusWindows for Codex",
+  "description": "Windows computer use in the background for Codex: UI Automation, Win32 messages, read back.",
+  "version": "3.0.0",
+  "websiteUrl": "https://julienpiron.fr/nexuswindows/codex/",
+  "repository": {
+    "url": "https://github.com/pironjulien/NexusWindows-Codex",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "nexus-windows-codex",
+      "version": "3.0.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

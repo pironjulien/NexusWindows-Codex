@@ -1,9 +1,40 @@
 {
-  "name": "codex-windows-computer-use",
-  "version": "1.9.0",
-  "description": "Background-first Windows desktop control for OpenAI Codex: observation, verification and application memory over Codex's supported Computer Use (Sky) API",
+  "name": "nexus-windows-codex",
+  "version": "3.0.0",
+  "description": "NexusWindows for Codex: Windows computer use in the background for OpenAI Codex (MCP server and Codex skill).",
   "type": "module",
   "license": "MIT",
+  "author": "Julien Piron",
+  "mcpName": "io.github.pironjulien/nexus-windows-codex",
+  "homepage": "https://julienpiron.fr/nexuswindows/codex/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pironjulien/NexusWindows-Codex.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pironjulien/NexusWindows-Codex/issues"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "codex",
+    "windows",
+    "computer-use",
+    "ui-automation"
+  ],
+  "bin": {
+    "nexus-windows-codex": "bin/nexus-windows-codex.mjs"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "native/bin/",
+    "garde-fous.json",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
   "engines": {
     "node": ">=22"
   },

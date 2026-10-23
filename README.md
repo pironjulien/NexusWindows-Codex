@@ -1,25 +1,28 @@
 # NexusWindows for Codex
 
+<!-- mcp-name: io.github.pironjulien/nexus-windows-codex -->
+
 [![Release](https://img.shields.io/github/v/release/pironjulien/NexusWindows-Codex)](https://github.com/pironjulien/NexusWindows-Codex/releases)
 [![Tests](https://github.com/pironjulien/NexusWindows-Codex/actions/workflows/tests.yml/badge.svg)](https://github.com/pironjulien/NexusWindows-Codex/actions/workflows/tests.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pironjulien/NexusWindows-Codex/badge)](https://scorecard.dev/viewer/?uri=github.com/pironjulien/NexusWindows-Codex)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](package.json)
-[![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](native)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/pironjulien/NexusWindows-Codex/blob/main/LICENSE)
+[![npm](https://img.shields.io/npm/v/nexus-windows-codex)](https://www.npmjs.com/package/nexus-windows-codex)
+[![Node 22+](https://img.shields.io/badge/node-22%2B-5FA04E?logo=nodedotjs&logoColor=white)](https://github.com/pironjulien/NexusWindows-Codex/blob/main/package.json)
+[![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet&logoColor=white)](https://github.com/pironjulien/NexusWindows-Codex/tree/main/native)
 [![Windows 10/11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4)](#installation)
 
-[![NexusWindows: Windows computer use for AI agents, in the background. Works with Claude, Codex and Antigravity.](docs/assets/banner.webp)](https://julienpiron.fr/nexuswindows/)
+[![NexusWindows: Windows computer use for AI agents, in the background. Works with Claude, Codex and Antigravity.](https://raw.githubusercontent.com/pironjulien/NexusWindows-Codex/main/docs/assets/banner.webp)](https://julienpiron.fr/nexuswindows/)
 
-**Windows computer use for Codex, in the background.** An add-on to the OpenAI Codex desktop app's own
-**Computer Use** plugin, not a replacement. Codex's Computer Use came to macOS first; on Windows, OpenAI's
-documentation says to keep the target app visible on the active desktop while it runs
-([Codex docs](https://developers.openai.com/codex/app/computer-use)). This layer makes it act in the background
-first. It keeps Codex's supported Computer Use API (`@oai/sky`) for window inventory, screenshots
-and physical input, and adds a local .NET helper that acts **in the background first**: Win32 messages and UI
-Automation without focus, so the user keeps their mouse, keyboard and foreground window. Every action is checked
-against an explicit postcondition.
+**Windows computer use for Codex, in the background.** An MCP server (`nexus-windows-codex`, one `npx` command) that
+lets OpenAI Codex see and operate Windows desktop applications while the user keeps their mouse, keyboard and
+foreground window. Codex's own Computer Use came to macOS first; on Windows, OpenAI's documentation says to keep the
+target app visible on the active desktop while it runs ([Codex docs](https://developers.openai.com/codex/app/computer-use)).
+NexusWindows for Codex has its own local .NET helper for everything: window inventory, UI Automation tree, PrintWindow
+capture of covered windows, Win32 messages and UI Automation patterns without focus, and its own real mouse and
+keyboard as the last resort, under a shared foreground token. Every action is judged from the application's real
+state, and a batch needs an explicit postcondition per step. It also ships as a Codex skill that layers the same session over Codex's Computer Use API (`@oai/sky`).
 
-Version 1.6.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
+Version 3.0.0 · Windows 10/11 · Node 22+ · .NET 8 · MIT licence
 
 Part of the Nexus family: [NexusWindows](https://julienpiron.fr/nexuswindows/)
 ([Claude](https://github.com/pironjulien/NexusWindows-Claude) ·
@@ -32,13 +35,115 @@ Project page: [julienpiron.fr/nexuswindows](https://julienpiron.fr/nexuswindows/
 ## Why
 
 Codex's built-in Computer Use acts with the physical mouse and keyboard: it brings the target window to the front and
-the user has to stop working while it acts. Many Windows applications can be driven without that. This layer tries
-the background techniques first, judges the result from the application's real state, and only uses Codex's
-physical input as a fallback, after a pause in the user's own typing and under a token shared with the other agents
-on the PC.
+the user has to stop working while it acts. Many Windows applications can be driven without that. NexusWindows for
+Codex tries the background techniques first, judges the result from the application's real state, and only uses its
+helper's real mouse and keyboard as a fallback, after a pause in the user's own typing and under a token shared with
+the other agents on the PC.
 
-It is a skill plus JavaScript modules loaded in Codex's Node REPL. It has no MCP server, no network port, no token and
-no private Electron API.
+It is an MCP server (Node, no npm dependency) with a self-contained .NET helper: no listening network port, no token
+and no private Electron API. The optional Codex skill runs the same session in Codex's Node REPL instead, over Codex's
+Computer Use API.
+
+## NexusWindows family
+
+Three MCP servers, one per agent, built separately because each model needs its tools shaped for it, with the same
+promise: the user keeps their mouse, keyboard and foreground window, and every action is read back.
+
+| | Claude | Codex | Antigravity |
+|---|---|---|---|
+| Install | `uvx --python 3.14 nexus-windows` | `npx -y nexus-windows-codex` | `uvx --python 3.14 nexus-windows-antigravity` |
+| Package | [PyPI](https://pypi.org/project/nexus-windows/) | [npm](https://www.npmjs.com/package/nexus-windows-codex) | [PyPI](https://pypi.org/project/nexus-windows-antigravity/) |
+| Tools | `windows` `look` `act` `launch` `window`, plus `notifications` and `logs` | `windows` `look` `act` `launch` `window` | `windows` `look` `act` `launch` `window` |
+| Repository | [NexusWindows-Claude](https://github.com/pironjulien/NexusWindows-Claude) | [NexusWindows-Codex](https://github.com/pironjulien/NexusWindows-Codex) | [NexusWindows-Antigravity](https://github.com/pironjulien/NexusWindows-Antigravity) |
+
+Every step reports ✓ verified, = already done, ~ unknown (never replayed) or ✗ failed or refused. The three share the
+guardrail policy, the foreground token, the emergency stop (Ctrl+Alt+Shift+Esc), a common journal format and a common
+bench.
+
+## Installation
+
+Requirements: Windows 10 or 11 and Node 22+. The npm package carries a self-contained helper: no .NET install.
+
+From [npm](https://www.npmjs.com/package/nexus-windows-codex), in Codex's `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.nexus-windows]
+command = "cmd"
+args = ["/c", "npx", "-y", "nexus-windows-codex"]
+```
+
+On Windows, `npx` is a `.cmd` script, hence `cmd /c`. The same command works in any MCP client
+(`"command": "cmd", "args": ["/c", "npx", "-y", "nexus-windows-codex"]`).
+
+### Codex skill (alternative, from a clone)
+
+The skill runs the same session inside Codex's Node REPL and can fall back on Codex's Computer Use API. It needs the
+Codex desktop app with its Computer Use plugin and the .NET 8 SDK:
+
+```powershell
+git clone https://github.com/pironjulien/NexusWindows-Codex.git
+cd NexusWindows-Codex
+pwsh -NoProfile -File install.ps1             # build the helper, install the skill into %USERPROFILE%\.codex\skills\nexus-windows
+pwsh -NoProfile -File install.ps1 -CheckOnly  # verify the installation matches the sources
+```
+
+`install.ps1` keeps versioned helper builds under `%LOCALAPPDATA%\NexusCodex\ComputerUse` (or `-StateRoot`), writes a
+source-linked `entry.mjs` next to the skill (so keep the clone where it is), checks the four .NET runtime files by
+hash, and serialises concurrent installations. `CODEX_HOME` or `-CodexHome` changes the Codex folder. Re-run it after
+updating the clone. Note: the build path must stay under the Windows 260-character limit. The MCP server also finds
+this helper when it runs from a clone.
+
+The skill is picked up by new Codex sessions. A REPL that already imported an older version must be reset, because
+the JavaScript module cache does not reload.
+
+## Tools
+
+| Tool | Purpose |
+|---|---|
+| `windows(filter)` | Application windows (id, app, title, pid), like the taskbar; password managers never listed |
+| `look(window, mode)` | One window by id or a unique part of its title or app: UI Automation tree, plus a capture that works on covered windows with `mode="image"` or `"both"`; selects the window for `act` |
+| `act(steps)` | One step, or up to 32 each with its own `expect`, on the window of the last `look`; stops at the first step not verified |
+| `launch(app)` | Start an application (name, path, Store app id), a folder, a document or a Settings page (`ms-settings:`) and give the foreground back |
+| `window(action, window)` | `action="close"`: one close message, read back; a "save?" prompt is reported, never answered |
+
+Step kinds: `click` (selector, or point and native capture id; `button`, `count`), `setValue`, `typeText`, `key`,
+`select`, `menu`, `secondary`, `scroll`, `drag`. Each step reports ✓ verified, = already done, ~ unknown (look again,
+never replayed) or ✗ failed or refused.
+
+## Usage
+
+As an MCP server: `windows`, then `look` at one window, then `act` with selectors from that look and an `expect`
+that proves the effect. An observation serves one `act` and expires after 60 s.
+
+As a skill, the agent follows [SKILL.md](https://github.com/pironjulien/NexusWindows-Codex/blob/main/skill/nexus-windows/SKILL.md) and the [API reference](https://github.com/pironjulien/NexusWindows-Codex/blob/main/skill/nexus-windows/references/api.md).
+In Codex's Node REPL:
+
+```js
+if (!globalThis.sky) { const { sky } = await import('@oai/sky'); globalThis.sky = sky; }
+const home = nodeRepl.homeDir ?? (await import('node:os')).homedir();
+globalThis.nexusWindows = await import('file:///' + home.replaceAll('\\', '/') + '/.codex/skills/nexus-windows/entry.mjs');
+globalThis.win = nexusWindows.createWindowsSession(sky);
+nodeRepl.write(await win.windows());          // pick exactly one window from this list
+await win.bind({ id: chosenWindowId, app: chosenAppId });
+globalThis.obs = await win.observe();
+globalThis.result = await win.act(obs, {
+  kind: 'click', selector: { automationId: 'okButton', role: 'button' },
+  expect: { selector: { automationId: 'status' }, field: 'name', equals: 'Saved' }
+});
+```
+
+Read `result.status`, `result.technique` and `result.foregroundTaken`, then continue from `result.observation`.
+Call `await win.close()` at the end.
+
+Local files:
+
+| Location | Content |
+|---|---|
+| `%USERPROFILE%\.codex\skills\nexus-windows` | installed skill and `entry.mjs` |
+| `%LOCALAPPDATA%\NexusCodex\ComputerUse\native\<fingerprint>` | versioned helper builds |
+| `%LOCALAPPDATA%\NexusCodex\ComputerUse\recipes` | verified recipes (static UI labels only) |
+| `%LOCALAPPDATA%\NexusCodex\ComputerUse\reports` | explicit measurements, no window content or typed text |
+| `%LOCALAPPDATA%\NexusCodex\ComputerUse\captures` | native captures, 10 minutes and 32 files at most |
 
 ## What it does
 
@@ -89,8 +194,10 @@ its option element.
 
 `observe({mode:'image', capture:'native'})` captures the bound window with `PrintWindow(PW_RENDERFULLCONTENT)`
 without bringing it forward, even when covered: per-monitor DPI aware, cropped to the DWM frame, DPI-unaware windows
-drawn at their logical size and scaled. A blank, minimized or failed capture falls back to Sky's screenshot. Native
-images are local PNG files (10 minutes, 32 files at most) used as evidence, never as coordinate targets.
+drawn at their logical size and scaled. In the Codex skill, a blank, minimized or failed capture falls back to Sky's
+screenshot; the MCP server has no such fallback and reports the failure. Native images are local PNG files (32 files
+at most, removed after 10 minutes at the next capture, at server start and at a clean stop): evidence for the model,
+and the coordinate frame of a point action that names the image (`screenshotId`).
 
 ### Verified batches (`actBatch`)
 
@@ -182,9 +289,12 @@ monotonic clock: deleting the file or changing the clock does not lift it.
 
 ```mermaid
 flowchart LR
-    Codex["Codex Node REPL"] --> Skill["skill entry.mjs"]
-    Skill --> Session["lib session.mjs"]
-    Session --> Sky["Codex Computer Use API"]
+    Codex["Codex"] --> MCP["MCP server bin and lib mcp.mjs"]
+    MCP --> Provider["lib native-provider.mjs"]
+    Provider --> Session["lib session.mjs"]
+    Codex --> Skill["skill entry.mjs in the Node REPL"]
+    Skill --> Session
+    Session -. skill only .-> Sky["Codex Computer Use API"]
     Session --> Native["lib native.mjs"]
     Native --> Helper["NexusCodex.UIA server"]
     Helper --> Messages["Win32 messages"]
@@ -196,7 +306,10 @@ flowchart LR
 ```
 
 ```
+bin/nexus-windows-codex.mjs   the MCP server command (stdio)
 lib/
+  mcp.mjs        MCP protocol and tools (no npm dependency)
+  native-provider.mjs  window inventory by the helper, every window driven by the helper alone
   session.mjs    WindowsSession: bind, observe, act, actBatch, recipes, window following
   native.mjs     client for the .NET helper (one reused process, correlated requests, timeouts)
   tree.mjs       accessibility tree normalisation and digests
@@ -211,58 +324,6 @@ tests/           node:test suites; tests/live: real validation fixture (WinForms
 install.ps1      builds the helper and installs the skill
 test.ps1         offline check; -Full adds the real validation
 ```
-
-## Installation
-
-Requirements: Windows 10 or 11, the Codex desktop app with its Computer Use plugin, the .NET 8 SDK, and Node 22+ for
-the tests.
-
-```powershell
-git clone https://github.com/pironjulien/NexusWindows-Codex.git
-cd NexusWindows-Codex
-pwsh -NoProfile -File install.ps1             # build the helper, install the skill into %USERPROFILE%\.codex\skills\nexus-windows
-pwsh -NoProfile -File install.ps1 -CheckOnly  # verify the installation matches the sources
-```
-
-`install.ps1` keeps versioned helper builds under `%LOCALAPPDATA%\NexusCodex\ComputerUse` (or `-StateRoot`), writes a
-source-linked `entry.mjs` next to the skill (so keep the clone where it is), checks the four .NET runtime files by
-hash, and serialises concurrent installations. `CODEX_HOME` or `-CodexHome` changes the Codex folder. Re-run it after
-updating the clone. Note: the build path must stay under the Windows 260-character limit.
-
-The skill is picked up by new Codex sessions. A REPL that already imported an older version must be reset, because
-the JavaScript module cache does not reload.
-
-## Usage
-
-The agent follows [SKILL.md](skill/nexus-windows/SKILL.md) and the [API reference](skill/nexus-windows/references/api.md).
-In Codex's Node REPL:
-
-```js
-if (!globalThis.sky) { const { sky } = await import('@oai/sky'); globalThis.sky = sky; }
-const home = nodeRepl.homeDir ?? (await import('node:os')).homedir();
-globalThis.nexusWindows = await import('file:///' + home.replaceAll('\\', '/') + '/.codex/skills/nexus-windows/entry.mjs');
-globalThis.win = nexusWindows.createWindowsSession(sky);
-nodeRepl.write(await win.windows());          // pick exactly one window from this list
-await win.bind({ id: chosenWindowId, app: chosenAppId });
-globalThis.obs = await win.observe();
-globalThis.result = await win.act(obs, {
-  kind: 'click', selector: { automationId: 'okButton', role: 'button' },
-  expect: { selector: { automationId: 'status' }, field: 'name', equals: 'Saved' }
-});
-```
-
-Read `result.status`, `result.technique` and `result.foregroundTaken`, then continue from `result.observation`.
-Call `await win.close()` at the end.
-
-Local files:
-
-| Location | Content |
-|---|---|
-| `%USERPROFILE%\.codex\skills\nexus-windows` | installed skill and `entry.mjs` |
-| `%LOCALAPPDATA%\NexusCodex\ComputerUse\native\<fingerprint>` | versioned helper builds |
-| `%LOCALAPPDATA%\NexusCodex\ComputerUse\recipes` | verified recipes (static UI labels only) |
-| `%LOCALAPPDATA%\NexusCodex\ComputerUse\reports` | explicit measurements, no window content or typed text |
-| `%LOCALAPPDATA%\NexusCodex\ComputerUse\captures` | native captures, 10 minutes and 32 files at most |
 
 ## Measurements
 
@@ -325,21 +386,23 @@ taken.
 
 ## Privacy
 
-NexusWindows for Codex runs entirely on your PC, inside the Codex desktop app. It has no account, no telemetry, no
-analytics and makes no network requests of its own.
+NexusWindows for Codex runs entirely on your PC. It has no account, no telemetry, no
+analytics and makes no network requests of its own. Its only connections are local: to the DevTools port on
+`127.0.0.1` of a Chromium or Electron window it drives, never to another machine.
 
 - **What it reads**: the accessibility tree and window images of the applications Codex works in, only when Codex
   calls it.
 - **Where it goes**: results are returned to Codex, which may send them to OpenAI under its own privacy policy; this
-  add-on sends nothing anywhere else.
+  server sends nothing anywhere else.
 - **What it stores**, under `%LOCALAPPDATA%/NexusCodex/ComputerUse`: the installed helper, recipes of routines you chose to remember
   (static interface labels only, never document text or typed values), per-session metrics (action kind, outcome,
   technique, duration; no UI text, screenshots, typed values or titles) and window captures, of which only the last
-  32 are kept, each for at most 10 minutes. Under `~/.nexus`: the shared foreground token and emergency-stop state.
+  32 are kept; a capture older than 10 minutes is removed at the next capture, at server start and at a clean stop
+  (a capture can outlive a server that is killed, until its next start). Under `~/.nexus`: the shared foreground token and emergency-stop state.
   Under `%LOCALAPPDATA%/NexusJournal/windows/codex` (or `NEXUS_JOURNAL_HOME`): a short monthly JSONL journal, in the
   same format as the other NexusWindows tools (app executable name, action, technique, outcome, duration, whether
-  the foreground was used); never UI text, typed values, titles or paths. The add-on never deletes it.
-- **Removing it**: delete those folders (and `%LOCALAPPDATA%/NexusJournal`) and the skill from Codex.
+  the foreground was used); never UI text, typed values, titles or paths. The server never deletes it.
+- **Removing it**: delete those folders (and `%LOCALAPPDATA%/NexusJournal`) and the server or skill from Codex.
 
 Questions or concerns: open an issue on this repository.
 
@@ -353,9 +416,15 @@ Questions or concerns: open an issue on this repository.
   no UI Automation and ignores posted input.
 - An effect with no trace in the accessibility tree cannot be told from "no effect": give a postcondition that
   observes it, or `fallback:false`.
-- Physical Sky input cannot be tested outside the Codex REPL; its orchestration (pause, token, chunks, interruption)
-  is covered by the offline tests only.
-- The skill, comments and some messages are written for one user (they name him) and partly in French.
+- `launch` attributes a window to the launch by its process, and says how (`proof`): `process`, the process the
+  shell returned; or `application`, for an application named by its executable or Store id (whose launcher may hand
+  over to another process), a process of that application born after the request. With `application`, another
+  instance of the same application started by something else at the same moment could be taken for it. Files and
+  folders need an absolute path; their windows come back as candidates unless the shell returned the process that
+  shows them.
+- In the skill, Sky's physical input cannot be tested outside the Codex REPL; its orchestration (pause, token,
+  chunks, interruption) is covered by the offline tests only. The MCP server never uses Sky.
+- The skill, comments and some messages are written for one user (they name the user) and partly in French.
 
 ## Development
 
@@ -366,4 +435,4 @@ pwsh -NoProfile -File test.ps1 -Full   # also real token/stop tests and the back
 
 ## Licence
 
-MIT, see [LICENSE](LICENSE). Copyright (c) 2026 Julien Piron.
+MIT, see [LICENSE](https://github.com/pironjulien/NexusWindows-Codex/blob/main/LICENSE). Copyright (c) 2026 Julien Piron.

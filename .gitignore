@@ -1,4 +1,4 @@
-bin/
+native/bin/
 obj/
 node_modules/
 .DS_Store
