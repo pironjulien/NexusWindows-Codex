@@ -89,7 +89,7 @@ jobs:
           if npm view "nexus-windows-codex@$version" version >/dev/null 2>&1; then
             echo "nexus-windows-codex $version is already on npm: nothing to publish"
           else
-            npm publish "$tarball" --access public --provenance
+            npm publish "./$tarball" --access public --provenance
           fi
 
   registry:
