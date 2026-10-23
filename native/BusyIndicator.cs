@@ -2,11 +2,11 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 // Indicateur « agent au travail » : le logo pi de Julien tourne sur lui-meme (axe vertical, 1,618 s par tour) en bas a
-// droite de l'ecran de la fenetre pilotee, comme un ecran de chargement de jeu, avec un halo bleu-violet qui respire
-// (meme rendu que NexusBrowser 2.17). Affiche par le garde (--stop-guard, processus long de la session) sur la commande
+// droite de l'ecran de la fenetre pilotee, comme un ecran de chargement de jeu, sans halo (le logo seul, avec son
+// ombre ; demande de Julien du 22/10). Affiche par le garde (--stop-guard, processus long de la session) sur la commande
 // « busy <hwnd> », retire 1,618 s apres « idle ». Fenetre en couches toujours devant, sans bordure, transparente aux
 // clics, jamais activee, absente de la barre des taches (fenetre d'outil) et des captures (WDA_EXCLUDEFROMCAPTURE).
-// Rendu analytique (halo, ombre, piece) a partir de logo.png decode par GDI+ : aucune dependance ajoutee.
+// Rendu analytique (ombre, piece) a partir de logo.png decode par GDI+ : aucune dependance ajoutee.
 // NEXUS_WINDOWS_INDICATOR=0 le coupe.
 static class BusyIndicator
 {
@@ -63,11 +63,6 @@ static class BusyIndicator
         return 3 * y1 * v * (1 - v) * (1 - v) + 3 * y2 * v * v * (1 - v) + v * v * v;
     }
     public static double AngleAt(double phase) => 360 * Bezier(0.45, 0, 0.55, 1, phase - Math.Floor(phase));
-    public static double BreathAt(double phase)
-    {
-        var p = (phase - Math.Floor(phase)) * 2;
-        return Bezier(0.42, 0, 0.58, 1, p <= 1 ? p : 2 - p);
-    }
 
     // ---- Rendu ----
     static (int, int, byte[]) Logo()
@@ -144,9 +139,6 @@ static class BusyIndicator
         return coin;
     }
 
-    static readonly (double At, double R, double G, double B, double A)[] Stops =
-        { (0, 66, 133, 244, 0.55), (0.55, 155, 114, 203, 0.25), (0.72, 155, 114, 203, 0) };
-
     public static byte[][] RenderFrames(int diameter, int count = Frames)
     {
         var scale = diameter / 72.0;
@@ -162,32 +154,7 @@ static class BusyIndicator
         {
             Array.Clear(buffer);
             var phase = (double)f / count;
-            var breath = BreathAt(phase);
-            // Halo : disque de 92/72 du logo (inset -10px), degrade radial CSS « circle » jusqu'au coin de sa boite.
-            var disc = radius * 92 / 72 * (0.92 + 0.16 * breath);
-            var gradient = disc * Math.Sqrt(2);
-            var opacity = 0.55 + 0.45 * breath;
-            for (var y = 0; y < side; y++)
-                for (var x = 0; x < side; x++)
-                {
-                    var dist = Math.Sqrt((x + 0.5 - center) * (x + 0.5 - center) + (y + 0.5 - center) * (y + 0.5 - center));
-                    var edge = Clamp01(disc - dist + 0.5);
-                    if (edge <= 0) continue;
-                    var d = dist / gradient;
-                    if (d >= Stops[^1].At) continue;
-                    for (var s = 0; s < Stops.Length - 1; s++)
-                    {
-                        if (d < Stops[s].At || d > Stops[s + 1].At) continue;
-                        var k = (d - Stops[s].At) / (Stops[s + 1].At - Stops[s].At);
-                        var a = (Stops[s].A + (Stops[s + 1].A - Stops[s].A) * k) * opacity * edge;
-                        var o = (y * side + x) * 4;
-                        buffer[o] = (Stops[s].R + (Stops[s + 1].R - Stops[s].R) * k) / 255 * a;
-                        buffer[o + 1] = (Stops[s].G + (Stops[s + 1].G - Stops[s].G) * k) / 255 * a;
-                        buffer[o + 2] = (Stops[s].B + (Stops[s + 1].B - Stops[s].B) * k) / 255 * a;
-                        buffer[o + 3] = a;
-                        break;
-                    }
-                }
+            // Sans halo (demande de Julien du 22/10 : le fond bleu-violet faisait « moche ») : la piece et son ombre seules.
             var cos = Math.Cos(AngleAt(phase) * Math.PI / 180);
             var squeeze = Math.Abs(cos);
             if (squeeze > 0.02)

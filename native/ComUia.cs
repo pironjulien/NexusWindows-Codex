@@ -18,8 +18,12 @@ unsafe sealed class ComUia
     static readonly Guid IidExpandCollapse = new("619be086-1f4e-4ee4-bafa-210128738730");
     static readonly Guid IidSelection = new("5ed5202e-b2ac-47a6-b638-4b0bf140d78e");
     static readonly Guid IidText = new("32eba289-3583-42c9-9c59-3b6d9a1e9b6a");
+    static readonly Guid IidScroll = new("88f4d42a-e881-459d-a77c-73bbbb7e02dc");
+    static readonly Guid IidLegacy = new("828055ad-355b-4435-86d5-3b51c14a9b1b");
+    static readonly Guid IidScrollItem = new("b488300f-d015-4f19-9c29-bb595e3645ef");
     public const int InvokePatternId = 10000, SelectionPatternId = 10001, ValuePatternId = 10002, ExpandCollapsePatternId = 10005,
-        SelectionItemPatternId = 10010, TextPatternId = 10014, TogglePatternId = 10015;
+        SelectionItemPatternId = 10010, TextPatternId = 10014, TogglePatternId = 10015, ScrollPatternId = 10004,
+        ScrollItemPatternId = 10017, LegacyIAccessiblePatternId = 10018;
     const int RuntimeIdProperty = 30000, BoundingRectangleProperty = 30001, ProcessIdProperty = 30002, ControlTypeProperty = 30003,
         NameProperty = 30005, AccessKeyProperty = 30007, HasKeyboardFocusProperty = 30008, LegacyIAccessibleStateProperty = 30096, IsEnabledProperty = 30010, AutomationIdProperty = 30011,
         HelpTextProperty = 30013, IsPasswordProperty = 30019, NativeWindowHandleProperty = 30020, IsOffscreenProperty = 30022, FrameworkIdProperty = 30024,
@@ -180,7 +184,7 @@ unsafe sealed class ComUia
     // UIA : leurs options sont lues par messages (CB_GETCOUNT, CB_GETLBTEXT, CB_GETCURSEL), ouvertes ou non, en noeuds
     // synthetiques (identite d'execution [-1, fenetre, genre, rang]). Si l'une d'elles est ouverte, la lecture se fait
     // niveau par niveau (un aller-retour par element qui a des enfants) pour ne pas entrer dans son sous-arbre.
-    public UiTree ReadTree(nint hwnd)
+    public UiTree ReadTree(nint hwnd, bool withPopups = true)
     {
         var levels = false;
         Win32.EnumChildWindows(hwnd, (child, _) =>
@@ -195,10 +199,27 @@ unsafe sealed class ComUia
         // Chaque element appartient soit a la pile (pas encore decrit), soit a l'arbre : libere une seule fois.
         var pending = new Stack<(nint Element, int Depth, int[] Ancestors)>();
         pending.Push((root, 0, []));
+        // Menu contextuel ou deroulant WinForms ouvert (ContextMenuStrip : fenetre de premier niveau, hors de l'arbre UIA de
+        // la fenetre ; banc commun du 21/10 : « found 0 » pour « Copier ») : son sous-arbre est lu sous la racine, sa racine
+        // portant le HWND de la surgissante (nativeWindow), qui devient la portee des commandes de ce menu.
+        var popups = new Queue<nint>(withPopups ? Win32.LinkedMenuPopups(hwnd) : []);
         try
         {
-            while (pending.Count > 0)
+            while (pending.Count > 0 || popups.Count > 0)
             {
+                if (pending.Count == 0)
+                {
+                    var popup = popups.Dequeue();
+                    // Deja lue sous la fenetre : une fois possedee par le formulaire (apres sa premiere ouverture), UIA la
+                    // range parmi ses enfants ; relue ici, chaque commande apparaissait deux fois (banc du 22/10 :
+                    // « found 2 » pour « Copier » au second tour).
+                    if (tree.Nodes.Any(n => n.NativeWindow == popup)) continue;
+                    nint popupRoot;
+                    Check(((delegate* unmanaged[Stdcall]<nint, nint, nint, nint*, int>)Vt(automation)[10])(automation, popup, treeRequest, &popupRoot));
+                    if (popupRoot == 0) throw new InvalidOperationException("Open menu could not be read");
+                    pending.Push((popupRoot, 1, [0]));
+                    continue;
+                }
                 var (element, depth, ancestors) = pending.Peek();
                 if (tree.Nodes.Count >= MaxNodes || depth > MaxDepth)
                     throw new InvalidOperationException("Accessibility tree exceeds inspection bound; target a smaller window");
@@ -209,6 +230,12 @@ unsafe sealed class ComUia
                 {
                     if (!levels) foreach (var child in CachedChildren(element)) Release(child);
                     SynthesizeCombo(tree, node);
+                    continue;
+                }
+                if (IsClassicListBox(node))
+                {
+                    if (!levels) foreach (var child in CachedChildren(element)) Release(child);
+                    SynthesizeListBox(tree, node);
                     continue;
                 }
                 var children = levels ? Children(element) : CachedChildren(element);
@@ -256,6 +283,54 @@ unsafe sealed class ComUia
     public static bool IsClassicCombo(Node node) => node.Role == "combobox" && node.NativeWindow != 0 && node.FrameworkId is "Win32" or "WinForm" &&
         Win32.BaseClass(node.NativeWindow) == "combobox" && (Win32.Style(node.NativeWindow) & 0x3) != 0x1;
     public const int Synthetic = -1, SyntheticList = 1, SyntheticItem = 2, SyntheticEdit = 3;
+    // Liste WinForms a selection simple (classe LISTBOX) : ses elements UIA n'ont pas d'identite stable (banc commun du
+    // 21/10 : « Target is no longer present » au clic) ; ils sont lus par messages, comme les options d'une liste deroulante.
+    // Seulement une liste simple : ni selection multiple, ni dessinee par l'application (CheckedListBox, listes owner-draw :
+    // LB_GETTEXT y rend les donnees de l'element, pas le libelle ; cases a cocher perdues) - relecture de Codex.
+    public static bool IsClassicListBox(Node node) => node.Role == "list" && node.NativeWindow != 0 && node.FrameworkId == "WinForm" &&
+        Win32.BaseClass(node.NativeWindow) == "listbox" &&
+        (Win32.Style(node.NativeWindow) & (Win32.LBS_MULTIPLESEL | Win32.LBS_EXTENDEDSEL | 0x10 | 0x20)) == 0; // + LBS_OWNERDRAWFIXED/VARIABLE
+    public static void SynthesizeListBox(UiTree tree, Node list)
+    {
+        var hwnd = list.NativeWindow;
+        var key = unchecked((int)(long)hwnd);
+        var count = Win32.Send(hwnd, Win32.LB_GETCOUNT);
+        if (count is not { } total || total < 0) return;
+        var chosen = Win32.Send(hwnd, Win32.LB_GETCURSEL) ?? -1;
+        Win32.GetClientRect(hwnd, out var client);
+        var scale = Capture.Scale(hwnd);
+        for (var i = 0; i < Math.Min((int)total, 1000); i++)
+        {
+            var text = Win32.SendGetText(hwnd, Win32.LB_GETTEXTLEN, Win32.LB_GETTEXT, i, true) ?? "";
+            // Rectangle reel de la ligne (LB_GETITEMRECT, ecran) et visibilite : une ligne hors de la partie visible (ou une
+            // liste masquee) reste « offscreen », comme pour UIA (relecture de Codex).
+            double[] bounds = [];
+            var visible = false;
+            if (Win32.ItemRect(hwnd, i, out var logical))
+            {
+                // LB_GETITEMRECT rend des pixels du repere de la LISTE (logiques si elle n'est pas adaptee au DPI : aucun
+                // message n'est converti) ; le helper travaille en pixels reels (app.manifest), comme GetClientRect.
+                var r = Scaled(logical, scale);
+                visible = !r.Intersect(client).Empty;
+                // Ligne hors de la partie visible de la LISTE : aucun rectangle, donc refusee comme hors champ (session.mjs,
+                // Program.cs), meme si elle tombe encore dans la fenetre (relecture de Codex, 21/10 : ligne sous la liste).
+                var origin = new Win32.Point { X = r.Left, Y = r.Top };
+                Win32.ClientToScreen(hwnd, ref origin);
+                if (visible) bounds = [origin.X, origin.Y, r.Width, r.Height];
+            }
+            tree.Add(new Node
+            {
+                Role = "listitem", Name = text, AutomationId = "", Description = "", RuntimeId = [Synthetic, key, SyntheticItem, i], Bounds = bounds,
+                Depth = list.Depth + 1, Ancestors = [.. list.Ancestors, list.Index], FrameworkId = list.FrameworkId, ProcessId = list.ProcessId,
+                Disabled = list.Disabled, Selected = i == chosen, Offscreen = list.Offscreen || !visible,
+            });
+        }
+    }
+    static Win32.Rect Scaled(Win32.Rect r, double scale) => scale == 1.0 ? r : new Win32.Rect
+    {
+        Left = (int)Math.Round(r.Left * scale), Top = (int)Math.Round(r.Top * scale),
+        Right = (int)Math.Round(r.Right * scale), Bottom = (int)Math.Round(r.Bottom * scale),
+    };
     public static bool IsSynthetic(int[] runtimeId) => runtimeId is [Synthetic, _, _, _];
     // Noeuds lus par messages sous une liste deroulante classique : son champ (CBS_DROPDOWN), sa liste et ses options.
     // L'etat ouvert (CB_GETDROPPEDSTATE) et la valeur (option choisie) sont portes par la liste deroulante elle-meme.
@@ -541,7 +616,8 @@ unsafe sealed class ComUia
         {
             InvokePatternId => IidInvoke, TogglePatternId => IidToggle, ValuePatternId => IidValue,
             SelectionItemPatternId => IidSelectionItem, ExpandCollapsePatternId => IidExpandCollapse,
-            SelectionPatternId => IidSelection, TextPatternId => IidText,
+            SelectionPatternId => IidSelection, TextPatternId => IidText, ScrollPatternId => IidScroll,
+            ScrollItemPatternId => IidScrollItem, LegacyIAccessiblePatternId => IidLegacy,
             _ => throw new ArgumentOutOfRangeException(nameof(patternId)),
         };
         nint pattern;
@@ -550,6 +626,21 @@ unsafe sealed class ComUia
     }
     // Premiere methode propre a chaque interface de motif : Invoke, Toggle, SetValue, Select, Expand (emplacement 3).
     public static void CallSlot(nint pattern, int slot) => Check(((delegate* unmanaged[Stdcall]<nint, int>)Vt(pattern)[slot])(pattern));
+    public static double ReadDouble(nint pattern, int slot)
+    {
+        double value;
+        Check(((delegate* unmanaged[Stdcall]<nint, double*, int>)Vt(pattern)[slot])(pattern, &value));
+        return value;
+    }
+    // IUIAutomationScrollPattern::Scroll(horizontalAmount, verticalAmount) : ScrollAmount 1 = petit retrait, 2 = rien,
+    // 4 = petite avance.
+    public static void Scroll(nint pattern, int horizontal, int vertical) =>
+        Check(((delegate* unmanaged[Stdcall]<nint, int, int, int>)Vt(pattern)[3])(pattern, horizontal, vertical));
+    public static int ProcessIdOf(nint element)
+    {
+        int pid;
+        return ((delegate* unmanaged[Stdcall]<nint, int*, int>)Vt(element)[20])(element, &pid) < 0 ? 0 : pid; // get_CurrentProcessId
+    }
     public static int ReadInt(nint pattern, int slot)
     {
         int value;
@@ -576,10 +667,175 @@ unsafe sealed class ComUia
         int focused;
         return ((delegate* unmanaged[Stdcall]<nint, int*, int>)Vt(element)[26])(element, &focused) >= 0 && focused != 0; // get_CurrentHasKeyboardFocus
     }
+    public int ControlTypeOfWindow(nint hwnd)
+    {
+        var element = ElementFromHandle(hwnd);
+        try { return ControlType(element); } finally { Release(element); }
+    }
     public static int ControlType(nint element)
     {
         int type;
         return ((delegate* unmanaged[Stdcall]<nint, int*, int>)Vt(element)[21])(element, &type) >= 0 ? type : 0; // get_CurrentControlType
+    }
+
+    // Conteneur defilable sur l'axe sous un point, cherche dans le SOUS-ARBRE UI Automation de la fenetre `hwnd` (jamais
+    // un test global au point : une autre fenetre, meme du meme processus, peut recouvrir la cible ; relecture de Codex,
+    // 21/10) : candidats visibles, du processus de la fenetre, dont le rectangle contient le point ; choix par
+    // ScrollChoice (plus petite aire, le plus profond a aire egale, ambigu = refus). (element, motif) a liberer, ou
+    // (0, 0) sans candidat. Aucune fuite COM sur exception. Rectangles en pixels du contexte DPI du fil appelant.
+    public (nint Element, nint Pattern) ScrollContainerAt(nint hwnd, int x, int y, bool vertical)
+    {
+        nint array;
+        var root = ElementFromHandle(hwnd);
+        try
+        {
+            var condition = Condition(30034 /* UIA_IsScrollPatternAvailablePropertyId */, new Variant { Vt = VT_BOOL, Bool = -1 });
+            try { Check(((delegate* unmanaged[Stdcall]<nint, int, nint, nint*, int>)Vt(root)[6])(root, TreeScopeSubtree, condition, &array)); } // FindAll
+            finally { Release(condition); }
+        }
+        finally { Release(root); }
+        if (array == 0) return (0, 0);
+        var pid = (int)Win32.ProcessOf(hwnd);
+        var candidates = new List<(nint Element, nint Pattern, long Area)>();
+        var chosen = -1;
+        try
+        {
+            int length;
+            Check(((delegate* unmanaged[Stdcall]<nint, int*, int>)Vt(array)[3])(array, &length));
+            ScrollChoice.CheckCount(length);
+            for (var i = 0; i < length; i++)
+            {
+                nint element;
+                if (((delegate* unmanaged[Stdcall]<nint, int, nint*, int>)Vt(array)[4])(array, i, &element) < 0 || element == 0) continue;
+                nint pattern = 0;
+                var keep = false;
+                try
+                {
+                    Win32.Rect r;
+                    int offscreen;
+                    if (ProcessIdOf(element) != pid) continue;
+                    if (((delegate* unmanaged[Stdcall]<nint, Win32.Rect*, int>)Vt(element)[43])(element, &r) < 0) continue; // get_CurrentBoundingRectangle
+                    if (x < r.Left || y < r.Top || x >= r.Right || y >= r.Bottom) continue;
+                    if (((delegate* unmanaged[Stdcall]<nint, int*, int>)Vt(element)[38])(element, &offscreen) < 0 || offscreen != 0) continue; // get_CurrentIsOffscreen
+                    pattern = Pattern(element, ScrollPatternId);
+                    if (pattern == 0 || ReadInt(pattern, vertical ? 10 : 9) == 0) continue; // get_CurrentVertically/HorizontallyScrollable
+                    candidates.Add((element, pattern, (long)r.Width * r.Height));
+                    keep = true;
+                }
+                finally { if (!keep) { Release(pattern); Release(element); } }
+            }
+            chosen = ScrollChoice.Pick(candidates.Select(c => c.Area).ToList(), (a, b) => IsDescendant(candidates[a].Element, candidates[b].Element));
+            return chosen < 0 ? (0, 0) : (candidates[chosen].Element, candidates[chosen].Pattern);
+        }
+        finally
+        {
+            Release(array);
+            for (var i = 0; i < candidates.Count; i++) if (i != chosen) { Release(candidates[i].Pattern); Release(candidates[i].Element); }
+        }
+    }
+
+    // `child` est-il un descendant strict de `ancestor` (vue Controle, 64 niveaux au plus) ?
+    bool IsDescendant(nint child, nint ancestor)
+    {
+        var current = child;
+        var owned = false;
+        try
+        {
+            for (var depth = 0; depth < 64; depth++)
+            {
+                nint parent = 0;
+                if (((delegate* unmanaged[Stdcall]<nint, nint, nint*, int>)Vt(walker)[3])(walker, current, &parent) < 0 || parent == 0) return false; // GetParentElement
+                if (owned) Release(current);
+                current = parent;
+                owned = true;
+                if (Same(current, ancestor)) return true;
+            }
+            return false;
+        }
+        finally { if (owned) Release(current); }
+    }
+
+    // Element de menu DIRECTEMENT sous `scope` (MenuSearch : sans franchir un autre element de menu, nom et identifiant
+    // d'automatisation, lecture complete ou refus), par la vue Controle. 0 si absent ; a liberer.
+    public nint MenuChild(nint scope, string name, string? automationId)
+    {
+        var held = new List<nint>();
+        nint kept = 0;
+        try
+        {
+            IReadOnlyList<nint> Children(nint parent)
+            {
+                var list = new List<nint>();
+                nint child;
+                if (((delegate* unmanaged[Stdcall]<nint, nint, nint*, int>)Vt(walker)[4])(walker, parent, &child) < 0) // GetFirstChildElement
+                    throw new BackgroundNotApplicableException("Menu could not be read completely: nothing was sent");
+                while (child != 0)
+                {
+                    held.Add(child);
+                    list.Add(child);
+                    if (held.Count > MenuSearch.Max + 1) throw new BackgroundNotApplicableException("Menu too large to be read completely: nothing was sent");
+                    nint next;
+                    if (((delegate* unmanaged[Stdcall]<nint, nint, nint*, int>)Vt(walker)[6])(walker, child, &next) < 0) // GetNextSiblingElement
+                        throw new BackgroundNotApplicableException("Menu could not be read completely: nothing was sent");
+                    child = next;
+                }
+                return list;
+            }
+            var (found, item) = MenuSearch.Find(scope, Children, e => ControlType(e) == 50011 /* MenuItem */, CurrentName, CurrentAutomationId, name, automationId);
+            if (found) kept = item;
+            return kept;
+        }
+        finally { foreach (var element in held) if (element != kept) Release(element); }
+    }
+    static string CurrentAutomationId(nint element)
+    {
+        nint bstr;
+        if (((delegate* unmanaged[Stdcall]<nint, nint*, int>)Vt(element)[29])(element, &bstr) < 0 || bstr == 0) return ""; // get_CurrentAutomationId
+        try { return Marshal.PtrToStringBSTR(bstr); } finally { Marshal.FreeBSTR(bstr); }
+    }
+    public nint WindowElement(nint hwnd) => ElementFromHandle(hwnd);
+
+    // ---- Chromium sans activation (recette commune : NexusClaude act_chromium, NexusAGY _chromium_simulated_typing) ----
+    // Focus DOM par l'action MSAA accSelect(SELFLAG_TAKEFOCUS) : contrairement a UIA SetFocus, n'active pas la fenetre.
+    public static void TakeFocus(nint element)
+    {
+        var pattern = Pattern(element, LegacyIAccessiblePatternId);
+        if (pattern == 0) throw new BackgroundNotApplicableException("No MSAA action to focus without activation");
+        try { Check(((delegate* unmanaged[Stdcall]<nint, int, int>)Vt(pattern)[3])(pattern, 1 /* SELFLAG_TAKEFOCUS */)); } // Select
+        finally { Release(pattern); }
+    }
+
+    // Caret en fin de texte (plage vide a la fin du document de l'element, selectionnee) : la frappe s'ajoute.
+    public static void CaretToEnd(nint element)
+    {
+        var pattern = Pattern(element, TextPatternId);
+        if (pattern == 0) throw new BackgroundNotApplicableException("No text pattern to place the caret: nothing was typed");
+        nint range = 0;
+        try
+        {
+            Check(((delegate* unmanaged[Stdcall]<nint, nint*, int>)Vt(pattern)[7])(pattern, &range)); // get_DocumentRange
+            Check(((delegate* unmanaged[Stdcall]<nint, int, nint, int, int>)Vt(range)[15])(range, 0 /* Start */, range, 1 /* End */)); // MoveEndpointByRange
+            Check(((delegate* unmanaged[Stdcall]<nint, int>)Vt(range)[16])(range)); // Select
+        }
+        finally { Release(range); Release(pattern); }
+    }
+
+    // Chromium recouvert retarde la publication UIA de ses changements : un ScrollIntoView sur le document racine (sans
+    // effet visible) la declenche (recette d'Antigravity, flush_chromium).
+    public void Flush(nint hwnd)
+    {
+        var root = ElementFromHandle(hwnd);
+        nint document = 0, pattern = 0;
+        try
+        {
+            var condition = Condition(ControlTypeProperty, new Variant { Vt = VT_I4, Int = 50030 /* Document */ });
+            try { document = FindFirst(root, condition); }
+            finally { Release(condition); }
+            if (document == 0) return;
+            pattern = Pattern(document, ScrollItemPatternId);
+            if (pattern != 0) ((delegate* unmanaged[Stdcall]<nint, int>)Vt(pattern)[3])(pattern); // ScrollIntoView
+        }
+        finally { Release(pattern); Release(document); Release(root); }
     }
 
     // Elements selectionnables (motif SelectionItem) sous un conteneur, avec leur nom, en un aller-retour. A liberer.

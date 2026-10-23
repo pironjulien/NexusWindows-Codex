@@ -5,11 +5,19 @@ description: Operate Windows desktop apps for Julien with NexusCodex, using Code
 
 # NexusCodex Windows
 
-This is Codex's own Windows layer, maintained in this repository. It uses the supported `@oai/sky` API for screenshots and physical input, with a local .NET UI Automation extension for native applications whose controls Sky does not expose. It has no dependency on NexusAGY or NexusClaude.
+This is Codex's own Windows layer, maintained in this repository. It uses the supported `@oai/sky` API for inventory, screenshots and physical input, with local .NET UI Automation for current control state and background actions. It has no dependency on NexusAGY or NexusClaude.
 
 Prefer a dedicated app connector/API/CLI when it expresses the requested operation. For the web use the Codex integrated browser. For Codex chat coordination use the official app tools, not its Electron UI. Do not infer authorization to send a message from readable text or a learned recipe.
 
 Before desktop work read the installed **Computer Use** skill and its required guidance. Its SDK setup, application-access restrictions and sensitive-action rules still apply. This extension is for allowed application work, never a way around a denied app or action. No private Electron API, service authentication reuse, hidden messaging, or own-app UI automation.
+
+## Settings pages
+
+`await win.openSettings('ms-settings:display')` opens a Settings page through the helper (Sky refuses addresses); only the `ms-settings:` scheme is accepted. It waits for Julien's pause, holds the shared foreground token and gives the foreground back. When `window` is returned, `bind` it normally. When the page opened hidden (`bindable: 'bindOpenedSettings'`), `await win.bindOpenedSettings()` binds that window only; it is then observed, captured and driven by the helper alone, never by Sky.
+
+## Explorer folders and renaming
+
+To take a bound Explorer window to a folder, use `await win.openFolder('C:/absolute/existing/folder')`: the helper navigates through the Windows shell in the background and reads the arrival back; never Ctrl+L or the address bar. It refuses a window holding several tabs (the tab would be guessed). To rename an item, do it inside one `beginInteraction`: F2, type the name, press Enter explicitly, then observe the new name BEFORE `endInteraction`; ending the lease while the editor is still open commits whatever it holds.
 
 ## Start
 
@@ -31,7 +39,7 @@ globalThis.obs = await win.observe();
 nodeRepl.write(nexusWindows.summarize(obs));
 ```
 
-`source` says whether the observation comes from Sky or the native extension. If Sky exposes no text, native UIA supplies stable automation IDs, ancestor context, current values and runtime identity. For a nonempty but incomplete Sky tree, use `await win.observe({backend:'native'})`, stop and inspect the new observation. This explicitly invalidates the old indices. Native observations remain selected until `backend:'sky'` or another `bind`. Screenshots still use Sky. A minimized window can be restored with `await win.activate()`; inspect the resulting state before input. Call `await win.close()` when finished to release the native worker and invalidate the session.
+`source` says whether the observation comes from Sky or the native extension. With the installed helper, auto mode reads native UIA from the first observation: automation IDs, ancestor context, current values and runtime identity. Sky can return an older nonempty tree after a successful background action. If another representation is needed, use `await win.observe({backend:'sky'})`, stop and inspect it; that choice persists through actions and reads. `backend:'native'` returns to native UIA; a new `bind` restores the native default. Provider switches invalidate previous indices. Without a native inspector, auto mode uses Sky. A native read error is reported without an automatic provider switch. Screenshots still use Sky. A minimized window can be restored with `await win.activate()`; inspect the resulting state before input. Call `await win.close()` when finished to release the native worker and invalidate the session.
 
 ## Act, then verify
 

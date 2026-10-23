@@ -83,12 +83,19 @@ static class JulienPause
 // le premier plan, ou Julien etait deja dans la cible), kept-by-julien, none (aucune fenetre a qui le rendre), refused.
 static class ForegroundReturn
 {
-    const uint WM_SYSCOMMAND = 0x0112, SC_HOTKEY = 0xF150;
     static readonly HashSet<string> Switchers = new(StringComparer.OrdinalIgnoreCase) { "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "XamlExplorerHostIslandWindow", "MultitaskingViewFrame", "TaskSwitcherWnd", "ForegroundStaging" };
 
-    public static string GiveBack(nint noted, nint target)
+    // `input` : LastInput note avec la fenetre ; relu avant chaque geste de restitution et pendant chaque attente. Julien
+    // (ou un pair) a touche clavier ou souris entre-temps : son choix est garde, rien n'est remis devant (relecture de
+    // Codex, 21/10 : la seconde tentative pouvait tomber au milieu de sa saisie).
+    public static string GiveBack(nint noted, nint target, uint? input = null)
     {
+        // Sans reference donnee (repli UIA, bail physique) : saisie notee a l'entree, ce qui couvre la restitution elle-meme
+        // sans confondre les entrees precedentes de l'agent avec Julien (relecture de Codex, 21/10).
+        input ??= Win32.Probe().LastInput;
+        bool Moved() => Win32.Probe().LastInput != input;
         if (target == 0 || noted == 0) return "none";
+        if (Moved()) return "kept-by-julien";
         var fg = Win32.GetForegroundWindow();
         if (fg == noted) return "not-taken";
         var targetPid = Win32.ProcessOf(target);
@@ -99,6 +106,7 @@ static class ForegroundReturn
         for (var attempt = 0; attempt < 2; attempt++)
         {
             if (Win32.GetForegroundWindow() != fg) break; // le premier plan a change entre-temps : ne rien forcer
+            if (Moved()) return "kept-by-julien";
             var own = Win32.GetCurrentThreadId();
             var thread = Win32.GetWindowThreadProcessId(fg, out _);
             var attached = thread != 0 && thread != own && Win32.AttachThreadInput(own, thread, true);
@@ -107,20 +115,20 @@ static class ForegroundReturn
                 if (Win32.GetForegroundWindow() == fg) { Win32.BringWindowToTop(noted); Win32.SetForegroundWindow(noted); }
             }
             finally { if (attached) Win32.AttachThreadInput(own, thread, false); }
-            if (Wait(noted, 150)) return "restored";
+            if (Wait(noted, 150, Moved)) return "restored";
+            if (Moved()) return "kept-by-julien";
         }
-        // Windows refuse l'attache (cadre d'une application Store) : la fenetre cible au premier plan le rend elle-meme
-        // (DefWindowProc traite WM_SYSCOMMAND SC_HOTKEY par SetForegroundWindow(lParam)). Jamais a une fenetre de Julien.
-        var current = Win32.GetForegroundWindow();
-        if (current != 0 && Win32.ProcessOf(current) == targetPid && Win32.PostMessageW(current, WM_SYSCOMMAND, (nint)SC_HOTKEY, noted) && Wait(noted, 300)) return "restored";
+        // Plus de repli par WM_SYSCOMMAND SC_HOTKEY POSTE : une attente expiree ne retire pas le message de la file, qui
+        // pouvait reactiver l'ancienne fenetre apres le jeton et apres un choix de Julien (relecture de Codex, 21/10).
         return Win32.GetForegroundWindow() is var now && now != 0 && Win32.ProcessOf(now) != targetPid && now != noted ? "kept-by-julien" : "refused";
     }
-    static bool Wait(nint window, int ms)
+    static bool Wait(nint window, int ms, Func<bool>? stop = null)
     {
         var clock = Stopwatch.StartNew();
         while (clock.ElapsedMilliseconds < ms)
         {
             if (Win32.GetForegroundWindow() == window) return true;
+            if (stop?.Invoke() == true) return false;
             Thread.Sleep(10);
         }
         return Win32.GetForegroundWindow() == window;

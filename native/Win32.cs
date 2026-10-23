@@ -31,6 +31,15 @@ static class Win32
     public const int WS_DISABLED = 0x08000000;
 
     [DllImport("user32.dll")] public static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool GetClientRect(nint hwnd, out Rect rect);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(nint hwnd, ref Point point);
+    [DllImport("user32.dll")] static extern nint SendMessageTimeoutW(nint hwnd, uint msg, nint wparam, ref Rect lparam, uint flags, uint timeout, out nint result);
+    // Rectangle (client) de l'element `index` d'une LISTBOX (LB_GETITEMRECT), sans attente infinie (SMTO_ABORTIFHUNG).
+    public static bool ItemRect(nint list, int index, out Rect rect)
+    {
+        rect = default;
+        return SendMessageTimeoutW(list, 0x0198, index, ref rect, 0x0002, 1000, out var ok) != 0 && ok != -1;
+    }
     [DllImport("user32.dll")] public static extern bool GetCursorPos(out Point point);
     [DllImport("user32.dll")] public static extern bool GetLastInputInfo(ref LastInputInfo info);
     [DllImport("kernel32.dll")] public static extern uint GetTickCount();
@@ -82,7 +91,7 @@ static class Win32
     [DllImport("user32.dll")] public static extern int GetAwarenessFromDpiAwarenessContext(nint context);
     [DllImport("user32.dll")] public static extern nint MonitorFromWindow(nint hwnd, uint flags);
     [DllImport("shcore.dll")] public static extern int GetDpiForMonitor(nint monitor, int type, out uint x, out uint y);
-    [DllImport("user32.dll")] public static extern uint GetSystemDpiForProcess(nint process);
+    [DllImport("user32.dll")] public static extern uint GetDpiForWindow(nint hwnd);
 
     // GDI
     [DllImport("user32.dll")] public static extern nint GetDC(nint hwnd);
@@ -153,12 +162,80 @@ static class Win32
     public static int ExStyle(nint hwnd) => GetWindowLongW(hwnd, -20 /* GWL_EXSTYLE */);
     // Surgissante transitoire : WS_POPUP sans barre de titre qui ne s'active pas (WS_EX_NOACTIVATE : liste deroulante,
     // infobulle, surgissante WPF), ou liste ouverte d'une liste deroulante Win32 (ComboLBox).
-    public static bool IsTransientPopup(nint hwnd, string cls)
+    // `bound` : fenetre suivie. Menu WinForms : role UIA « menu » de la surgissante et lien a la fenetre suivie (meme fil
+    // d'interface, ou possedee par elle) exiges, lus seulement pour une fenetre outil WinForms sans barre de titre.
+    public static bool IsTransientPopup(nint hwnd, string cls, nint bound)
+    {
+        var (style, ex) = (unchecked((uint)Style(hwnd)), unchecked((uint)ExStyle(hwnd)));
+        var winformsTool = (style & 0x80000000) != 0 && (style & 0x00C00000) != 0x00C00000 && (ex & 0x88) != 0 && cls.StartsWith("WindowsForms10.", StringComparison.Ordinal);
+        var menu = winformsTool && MenuRole(hwnd);
+        var linked = winformsTool && (GetWindowThreadProcessId(hwnd, out _) == GetWindowThreadProcessId(bound, out _) || OwnedBy(hwnd, bound));
+        return IsTransientPopupStyle(style, ex, cls, menu, linked);
+    }
+    // Menus ouverts lies a la fenetre suivie : fenetres de premier niveau visibles du meme processus, dans l'ordre Z.
+    // WinForms (ContextMenuStrip, ToolStripDropDown) : surgissante transitoire prouvee (role menu ET lien). WPF
+    // (ContextMenu, mesure du 22/10) : surgissante HwndWrapper sans activation POSSEDEE par la fenetre suivie, du meme fil,
+    // contenant un menu UIA (sa racine est une « fenetre » : role lu dans son arbre).
+    public static List<nint> LinkedMenuPopups(nint bound)
+    {
+        var pid = ProcessOf(bound);
+        var found = new List<nint>();
+        EnumWindows((h, _) =>
+        {
+            if (h != bound && IsWindowVisible(h) && ProcessOf(h) == pid && ClassName(h) is var cls &&
+                (cls.StartsWith("WindowsForms10.", StringComparison.Ordinal) && IsTransientPopup(h, cls, bound) ||
+                 cls.StartsWith("HwndWrapper", StringComparison.Ordinal) && IsWpfMenuPopup(h, bound))) found.Add(h);
+            return true;
+        }, 0);
+        return found;
+    }
+    static bool IsWpfMenuPopup(nint hwnd, nint bound)
+    {
+        var (style, ex) = (unchecked((uint)Style(hwnd)), unchecked((uint)ExStyle(hwnd)));
+        if ((style & 0x80000000) == 0 || (style & 0x00C00000) == 0x00C00000 || (ex & 0x08000000) == 0) return false; // WS_POPUP, sans titre, NOACTIVATE
+        if (GetWindow(hwnd, GW_OWNER) != bound || GetWindowThreadProcessId(hwnd, out _) != GetWindowThreadProcessId(bound, out _)) return false;
+        try
+        {
+            using var tree = ComUia.Shared.ReadTree(hwnd, withPopups: false);
+            return tree.Nodes.Any(n => n.Role == "menu");
+        }
+        catch (Exception) { return false; }
+    }
+    static bool MenuRole(nint hwnd)
+    {
+        try { return ComUia.Shared.ControlTypeOfWindow(hwnd) == 50009 /* Menu */; }
+        catch (Exception) { return false; }
+    }
+    static bool OwnedBy(nint hwnd, nint bound)
+    {
+        for (var (owner, n) = (GetWindow(hwnd, GW_OWNER), 0); owner != 0 && n < 16; owner = GetWindow(owner, GW_OWNER), n++) if (owner == bound) return true;
+        return false;
+    }
+
+    // Surgissante transitoire d'apres styles et classe (fonction pure, testee hors ligne : --popup-selftest).
+    public static bool IsTransientPopupStyle(uint style, uint ex, string cls, bool menuRole = false, bool linked = false)
     {
         if (string.Equals(cls, "ComboLBox", StringComparison.OrdinalIgnoreCase)) return true;
-        var style = unchecked((uint)Style(hwnd));
-        const uint WS_POPUP = 0x80000000, WS_CAPTION = 0x00C00000, WS_EX_NOACTIVATE = 0x08000000;
-        return (style & WS_POPUP) != 0 && (style & WS_CAPTION) != WS_CAPTION && (unchecked((uint)ExStyle(hwnd)) & WS_EX_NOACTIVATE) != 0;
+        const uint WS_POPUP = 0x80000000, WS_CAPTION = 0x00C00000, WS_EX_NOACTIVATE = 0x08000000, WS_EX_TOOLWINDOW = 0x00000080, WS_EX_TOPMOST = 0x00000008;
+        if ((style & WS_POPUP) == 0 || (style & WS_CAPTION) == WS_CAPTION) return false;
+        if ((ex & WS_EX_NOACTIVATE) != 0) return true;
+        // Menu deroulant ou contextuel WinForms (ToolStripDropDown) : fenetre outil sans barre de titre, sans
+        // WS_EX_NOACTIVATE ; jamais suivie comme une nouvelle fenetre, signalee dans obs.popups (banc commun du 21/10 :
+        // le menu contextuel ouvert n'etait ni suivi ni signale, « found 0 »). Le style seul ne prouve rien (une palette
+        // persistante a le meme, relecture de Codex du 22/10) : role UIA « menu » ET lien a la fenetre suivie exiges.
+        // ContextMenuStrip mesure le 22/10 (labo WinForms) : WS_EX_TOPMOST | WS_EX_CONTROLPARENT, SANS WS_EX_TOOLWINDOW ; le
+        // clic droit l'ouvrait mais le helper ne le reconnaissait pas (« contextMenu: null »).
+        return (ex & (WS_EX_TOOLWINDOW | WS_EX_TOPMOST)) != 0 && cls.StartsWith("WindowsForms10.", StringComparison.Ordinal) && menuRole && linked;
+    }
+
+    public static int PopupSelfTest()
+    {
+        using var input = System.Text.Json.JsonDocument.Parse(Console.In.ReadToEnd());
+        var results = input.RootElement.EnumerateArray()
+            .Select(c => IsTransientPopupStyle(c.GetProperty("style").GetUInt32(), c.GetProperty("ex").GetUInt32(), c.GetProperty("cls").GetString() ?? "",
+                c.TryGetProperty("menu", out var m) && m.GetBoolean(), c.TryGetProperty("linked", out var l) && l.GetBoolean())).ToList();
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(results));
+        return 0;
     }
     public static uint ProcessOf(nint hwnd) { GetWindowThreadProcessId(hwnd, out var pid); return pid; }
 

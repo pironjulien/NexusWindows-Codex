@@ -54,7 +54,7 @@ test('the guard receives busy with the window, then a single idle after overlapp
 });
 
 const executable = process.env.NEXUS_FOREGROUND_EXE;
-test('native frames: round logo spinning on itself inside a breathing halo', { skip: !executable && 'NEXUS_FOREGROUND_EXE absent' }, async t => {
+test('native frames: round logo spinning on itself, without halo', { skip: !executable && 'NEXUS_FOREGROUND_EXE absent' }, async t => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'nexus-codex-frames-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const out = path.join(dir, 'frames.bin');
@@ -70,5 +70,6 @@ test('native frames: round logo spinning on itself inside a breathing halo', { s
   assert.ok(opaque(0) >= 60 && opaque(0) <= 80, `diamètre ${opaque(0)}`);
   assert.ok(opaque(12) < opaque(0), 'le logo tourne');
   const at = 0 * size + ((side / 2 - 40) * side + side / 2) * 4;
-  assert.ok(data[at + 3] > 0 && data[at] > data[at + 2], 'halo bleu-violet au-dessus du logo');
+  // Plus de halo bleu-violet (Julien, 22/10) : au-dessus du logo, au plus l'ombre noire, jamais de couleur.
+  assert.ok(data[at] === 0 && data[at + 1] === 0 && data[at + 2] === 0, 'aucune couleur au-dessus du logo');
 });

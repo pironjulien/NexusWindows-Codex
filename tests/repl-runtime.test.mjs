@@ -53,3 +53,25 @@ test('the native worker receives its mandatory policy without a process global',
   const { stdout, stderr } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', source], {windowsHide:true,env:{...process.env,NEXUS_TRANSPORT_TEST:'inherited'}});
   assert.equal(stdout, '');assert.equal(stderr, '');
 });
+
+test('the foreground token transport tells a live helper from a lost one without a process global', async () => {
+  // Relecture de Codex (21/10) : process.kill absent du REPL faisait passer tout helper vivant pour perdu.
+  const fixture = fileURLToPath(new URL('./fixtures/token-helper.mjs', import.meta.url));
+  const source = `
+    import assert from 'node:assert/strict';
+    const node = ${JSON.stringify(process.execPath)};
+    delete globalThis.process;
+    const { NativeUIA } = await import(${JSON.stringify(new URL('../lib/native.mjs', import.meta.url).href)});
+    const stop = { assertClear() {} };
+    const busy = ms => { const end = Date.now() + ms; while (Date.now() < end) {} };
+    const live = new NativeUIA(node, { tokenArgs: [${JSON.stringify(fixture)}], emergencyStop: stop });
+    let held = null;
+    assert.equal(await live.withForeground('fixture', async lease => { busy(50); held = lease.held(); return 'ok'; }), 'ok');
+    assert.equal(held, true);
+    const dying = new NativeUIA(node, { tokenArgs: [${JSON.stringify(fixture)}, '--exit-after', '20'], emergencyStop: stop });
+    await assert.rejects(dying.withForeground('fixture', async lease => { await new Promise(r => setTimeout(r, 0)); busy(150); held = lease.held(); return 'accepted'; }), /outcome unknown/);
+    assert.equal(held, false);
+  `;
+  const { stdout, stderr } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', source], { windowsHide: true });
+  assert.equal(stdout, ''); assert.equal(stderr, '');
+});

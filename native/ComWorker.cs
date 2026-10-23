@@ -35,6 +35,9 @@ static class ComWorker
         EmergencyStop.ThrowIfStopped();
         var op = request.GetProperty("op").GetString();
         var window = (nint)request.GetProperty("windowId").GetInt64();
+        if (op == "scrollAt") return ScrollAt(window, request);
+        if (op == "menuPath") return MenuPath(window, request);
+        if (op == "flush") { ComUia.Shared.Flush(window); return new { ok = true, technique = Uia, mechanism = "ScrollIntoView (document)", effect = "none" }; }
         var runtimeId = request.GetProperty("runtimeId").EnumerateArray().Select(e => e.GetInt32()).ToArray();
         string Text(string key) => request.TryGetProperty(key, out var v) ? v.GetString() ?? "" : "";
         // Avant le motif, tout echec (fenetre ou element disparus, fournisseur absent) precede l'entree.
@@ -53,6 +56,9 @@ static class ComWorker
                 "invoke" => WithPattern(element, ComUia.InvokePatternId, p => { EmergencyStop.ThrowIfStopped(); ComUia.CallSlot(p, 3); return new Outcome(Uia, "Invoke", "sent"); },
                     () => throw new BackgroundNotApplicableException("No InvokePattern")),
                 "setFocus" => SetFocus(element),
+                "takeFocus" => TakeFocus(element),
+                "caretToEnd" => CaretToEnd(element),
+                "hasFocus" => new Outcome(Uia, "HasKeyboardFocus", ComUia.HasKeyboardFocus(element) ? "applied" : "none"),
                 "setValue" => SetValue(element, Text("value")),
                 "expandCollapse" => ExpandCollapse(element, Text("action")),
                 "selectItem" => SelectItem(window, element, request.GetProperty("containerRuntimeId").EnumerateArray().Select(e => e.GetInt32()).ToArray()),
@@ -63,11 +69,177 @@ static class ComWorker
         }
         finally { ComUia.Release(element); }
     }
+    // Focus sans activation (MSAA accSelect), relu jusqu'a 500 ms : « applied » si l'element a le focus clavier, sinon
+    // « none » (rien n'est tape ensuite).
+    static Outcome TakeFocus(nint element)
+    {
+        EmergencyStop.ThrowIfStopped();
+        ComUia.TakeFocus(element);
+        var clock = Stopwatch.StartNew();
+        while (clock.ElapsedMilliseconds < 500)
+        {
+            if (ComUia.HasKeyboardFocus(element)) return new(Uia, "accSelect(SELFLAG_TAKEFOCUS)", "applied");
+            Thread.Sleep(20);
+        }
+        return new(Uia, "accSelect(SELFLAG_TAKEFOCUS)", "none");
+    }
+    static Outcome CaretToEnd(nint element)
+    {
+        EmergencyStop.ThrowIfStopped();
+        ComUia.CaretToEnd(element);
+        return new(Uia, "TextRange caret to end", "applied");
+    }
     static Outcome SetFocus(nint element)
     {
         EmergencyStop.ThrowIfStopped();
         ComUia.SetFocus(element);
         return new("foreground:uia", "SetFocus", ComUia.HasKeyboardFocus(element) ? "applied" : "sent");
+    }
+
+    // Menu WinForms (MenuStrip/ToolStrip, ContextMenuStrip ; sans barre de menus Win32) par son chemin dans la fenetre liee
+    // (banc commun du 21/10 : les identites UIA des elements ToolStrip changent a chaque lecture, « Target is no longer
+    // present ») : chaque segment {nom, identifiant d'automatisation facultatif} est cherche DIRECTEMENT sous le precedent
+    // (ComUia.MenuChild : jamais au travers d'un autre element de menu) ; un sous-menu dont les elements ne sont pas encore
+    // exposes est deplie (ExpandCollapse) ; la commande finale par UIA Invoke. Element absent, homonyme, lecture
+    // incomplete ou sans Invoke : non applicable, rien n'est invoque, et les sous-menus deplies par nous sont replies et
+    // leur fermeture RELUE ; une fermeture non prouvee est une issue inconnue (relecture de Codex du 22/10).
+    static object MenuPath(nint window, JsonElement request)
+    {
+        var segments = request.GetProperty("path").EnumerateArray()
+            .Select(p => (Name: p.GetProperty("name").GetString() ?? "", AutomationId: p.TryGetProperty("automationId", out var a) ? a.GetString() : null)).ToArray();
+        if (segments.Length == 0 || segments.Any(p => p.Name.Length == 0)) throw new BackgroundNotApplicableException("Invalid menu path");
+        var held = new List<nint>();
+        var expanded = new List<nint>();
+        var scope = ComUia.Shared.WindowElement(window);
+        held.Add(scope);
+        var invoked = false;
+        try
+        {
+            foreach (var (name, automationId) in segments)
+            {
+                var item = ComUia.Shared.MenuChild(scope, name, automationId);
+                if (item == 0 && held.Count > 1)
+                {
+                    var expand = ComUia.Pattern(scope, ComUia.ExpandCollapsePatternId);
+                    if (expand != 0)
+                    {
+                        try
+                        {
+                            EmergencyStop.ThrowIfStopped();
+                            ComUia.CallSlot(expand, 3); // Expand
+                            expanded.Add(scope);
+                            WaitState(expand, s => s is 1 or 2);
+                        }
+                        finally { ComUia.Release(expand); }
+                        item = ComUia.Shared.MenuChild(scope, name, automationId);
+                    }
+                }
+                if (item == 0) throw new BackgroundNotApplicableException($"No background technique applies: menu item « {name} » not found at this level of the menu");
+                held.Add(item);
+                scope = item;
+            }
+            var outcome = WithPattern(scope, ComUia.InvokePatternId, p => { EmergencyStop.ThrowIfStopped(); invoked = true; ComUia.CallSlot(p, 3); return new Outcome(Uia, "Invoke (menu path)", "sent"); },
+                () => throw new BackgroundNotApplicableException("No background technique applies: the menu command has no Invoke"));
+            return new { ok = true, technique = outcome.Technique, mechanism = outcome.Mechanism, effect = outcome.Effect };
+        }
+        finally
+        {
+            try
+            {
+                if (!invoked)
+                    for (var i = expanded.Count - 1; i >= 0; i--)
+                        Collapse(expanded[i]);
+            }
+            finally { foreach (var element in held) ComUia.Release(element); }
+        }
+    }
+
+    // Repli d'un sous-menu deplie par nous, fermeture relue ; non prouvee : issue inconnue (terminal, jamais avalee).
+    static void Collapse(nint item)
+    {
+        var pattern = ComUia.Pattern(item, ComUia.ExpandCollapsePatternId);
+        if (pattern == 0) throw new InvalidOperationException("A menu opened for the search could not be closed; outcome unknown");
+        try { CollapseVerified(() => ComUia.CallSlot(pattern, 4), () => WaitState(pattern, s => s == 0)); }
+        finally { ComUia.Release(pattern); }
+    }
+    public static void CollapseVerified(Action collapse, Func<int> state)
+    {
+        int after;
+        try { collapse(); after = state(); }
+        catch (Exception error) { throw new InvalidOperationException("A menu opened for the search could not be closed; outcome unknown: " + error.Message, error); }
+        if (after != 0) throw new InvalidOperationException("A menu opened for the search is still open; outcome unknown");
+    }
+
+    // Controle hors ligne (tests) : stdin = ["closed" | "open" | "throws"] ; sortie un resultat par cas.
+    public static int CollapseSelfTest()
+    {
+        using var input = JsonDocument.Parse(Console.In.ReadToEnd());
+        var results = new List<string>();
+        foreach (var c in input.RootElement.EnumerateArray())
+        {
+            var kind = c.GetString();
+            try
+            {
+                CollapseVerified(() => { if (kind == "throws") throw new COMException("element gone"); }, () => kind == "open" ? 1 : 0);
+                results.Add("closed");
+            }
+            catch (InvalidOperationException error) { results.Add(error.Message); }
+        }
+        Console.WriteLine(JsonSerializer.Serialize(results));
+        return 0;
+    }
+
+    // Molette en arriere-plan d'une interface qui ignore la souris postee (WPF, banc commun du 21/10, recette A de
+    // Codex) : defilement SEMANTIQUE du plus petit conteneur UI Automation defilable sur cet axe sous le point, cherche
+    // dans le sous-arbre de la fenetre cible (ComUia.ScrollContainerAt). Un petit pas par cran ; position relue jusqu'a
+    // 1 s : changee = « applied », inchangee = « sent » (jamais une seconde technique). Deja a l'extremite REELLE (0 ou
+    // 100 %) : rien n'est envoye (« none »). Tout echec a partir du premier pas : issue inconnue. Ce n'est pas un
+    // evenement de molette : un canevas sans ScrollPattern reste non applicable.
+    static object ScrollAt(nint window, JsonElement request)
+    {
+        int Int(string key) => request.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+        var (x, y, deltaY, deltaX) = (Int("x"), Int("y"), Int("deltaY"), Int("deltaX"));
+        var previous = Win32.SetThreadDpiAwarenessContext(-4); // PER_MONITOR_AWARE_V2 : pixels reels, comme la capture
+        nint element = 0, pattern = 0;
+        try
+        {
+            var plan = ScrollPlan.Of(deltaY, deltaX);
+            (element, pattern) = ComUia.Shared.ScrollContainerAt(window, x, y, plan.Vertical);
+            if (pattern == 0) throw new BackgroundNotApplicableException("No scrollable UI Automation container of the window under the point on this axis");
+            var slot = plan.Vertical ? 6 : 5; // get_CurrentVertical/HorizontalScrollPercent
+            var before = ComUia.ReadDouble(pattern, slot);
+            if (plan.AtEnd(before))
+                return new { ok = true, technique = Uia, mechanism = $"ScrollPattern: already at the end ({before} %)", effect = "none" };
+            EmergencyStop.ThrowIfStopped();
+            try
+            {
+                for (var i = 0; i < plan.Notches; i++)
+                {
+                    if (i > 0) EmergencyStop.ThrowIfStopped();
+                    if (plan.Vertical) ComUia.Scroll(pattern, 2, plan.Amount); else ComUia.Scroll(pattern, plan.Amount, 2);
+                }
+                var after = before;
+                var clock = Stopwatch.StartNew();
+                while (clock.ElapsedMilliseconds < 1000)
+                {
+                    after = ComUia.ReadDouble(pattern, slot);
+                    if (after != before) break;
+                    Thread.Sleep(50);
+                }
+                return new { ok = true, technique = Uia, mechanism = $"ScrollPattern {plan.Notches}x ({before:0.##} % -> {after:0.##} %)", effect = after != before ? "applied" : "sent" };
+            }
+            catch (Exception error)
+            {
+                // Au moins un pas a pu partir : jamais « rien n'a ete envoye », jamais un repli.
+                throw new InvalidOperationException("Semantic scroll interrupted after input; outcome unknown, do not replay: " + error.Message, error);
+            }
+        }
+        finally
+        {
+            ComUia.Release(pattern);
+            ComUia.Release(element);
+            if (previous != 0) Win32.SetThreadDpiAwarenessContext(previous);
+        }
     }
 
     static T WithPattern<T>(nint element, int patternId, Func<nint, T> action, Func<T> missing)
@@ -252,7 +424,8 @@ static class ComBridge
         return job = created;
     }
 
-    public static Outcome Call(object request)
+    public static Outcome Call(object request) => Call(request, TimeoutMs);
+    public static Outcome Call(object request, int timeoutMs)
     {
         var process = child is { HasExited: false } ? child : Start();
         string? line;
@@ -261,7 +434,7 @@ static class ComBridge
             process.StandardInput.WriteLine(JsonSerializer.Serialize(request));
             process.StandardInput.Flush();
             var read = process.StandardOutput.ReadLineAsync();
-            if (!read.Wait(TimeoutMs)) { Stop(); throw new InvalidOperationException("COM UI Automation worker timed out; outcome unknown"); }
+            if (!read.Wait(timeoutMs)) { Stop(); throw new InvalidOperationException("COM UI Automation worker timed out; outcome unknown"); }
             line = read.Result;
         }
         catch (IOException error) { Stop(); throw new InvalidOperationException("COM UI Automation worker lost; outcome unknown: " + error.Message); }

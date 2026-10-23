@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Helper entier en pixels reels de chaque ecran (PER_MONITOR_AWARE_V2), comme la capture et les gestes au point : sans
+     cela, l'arbre UI Automation est lu en coordonnees virtualisees a 125 % et les rectangles ne visent plus le bon
+     controle (banc commun du 22/10 : clic droit WinForms tombe sur la fenetre au lieu de la liste). -->
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="NexusCodex.UIA"/>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>

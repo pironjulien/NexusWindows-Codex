@@ -4,8 +4,14 @@ const args = process.argv.slice(2);
 const at = args.indexOf('--foreground-token');
 const target = args[at + 2];
 process.stdout.write(JSON.stringify({ ok: true, foreground: 4242 }) + '\n');
-process.stdin.resume();
+// `--exit-after ms` : le helper disparaît pendant l'action (verrou libéré). « keep » reçu : choix de Julien gardé.
+const exitAfter = args.indexOf('--exit-after');
+if (exitAfter >= 0) setTimeout(() => process.exit(0), Number(args[exitAfter + 1]));
+let said = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', chunk => { said += chunk; });
 process.stdin.on('end', () => {
-  process.stdout.write(JSON.stringify({ giveBack: target ? `restored:${target}` : 'none' }) + '\n');
+  const giveBack = said.includes('keep') ? 'kept-by-julien' : target ? `restored:${target}` : 'none';
+  process.stdout.write(JSON.stringify({ released: true, giveBack }) + '\n'); // accusé de libération normale
   process.exit(0);
 });

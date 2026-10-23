@@ -336,7 +336,10 @@ analytics and makes no network requests of its own.
   (static interface labels only, never document text or typed values), per-session metrics (action kind, outcome,
   technique, duration; no UI text, screenshots, typed values or titles) and window captures, of which only the last
   32 are kept, each for at most 10 minutes. Under `~/.nexus`: the shared foreground token and emergency-stop state.
-- **Removing it**: delete those two folders and the skill from Codex.
+  Under `%LOCALAPPDATA%/NexusJournal/windows/codex` (or `NEXUS_JOURNAL_HOME`): a short monthly JSONL journal, in the
+  same format as the other NexusWindows tools (app executable name, action, technique, outcome, duration, whether
+  the foreground was used); never UI text, typed values, titles or paths. The add-on never deletes it.
+- **Removing it**: delete those folders (and `%LOCALAPPDATA%/NexusJournal`) and the skill from Codex.
 
 Questions or concerns: open an issue on this repository.
 

@@ -94,13 +94,14 @@ function provider({ title = 'Messagerie', tree = TREE, focus = 2 } = {}) {
     async perform_secondary_action(input) { this.calls.push(['secondary', input]); },
   };
 }
-async function setup(t, { native = {}, ...sky } = {}) {
+async function setup(t, { native = {}, backend = 'auto', ...sky } = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'nexus-gf-session-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const fake = provider(sky);
   const session = new WindowsSession(fake, { stateRoot: root, native: { withForeground: async (_, action) => action(), ...native } });
+  t.after(() => session.close());
   await session.bind({ id: 10 });
-  return { sky: fake, session, observation: await session.observe({ mode: 'both' }) };
+  return { sky: fake, session, observation: await session.observe({ mode: 'both', backend }) };
 }
 const refused = e => e.confirmationRequired === true && e.refused === true && e.beforeInput === true && /confirm:true/.test(e.message);
 // Geste sortant : confirm:true seul est refusé avec le jeton de CETTE action ; renvoyé avec le jeton (oui de Julien), il passe.
@@ -448,7 +449,7 @@ test('Gmail: a chip next to a recipient field that still holds a typed address i
 
 test('a coordinate gesture with no element bounds under the point is judged on every action button (native reading failed)', async t => {
   const failing = { inspect: async () => { throw new Error('observation exceeds inspection bound'); } };
-  const { session, sky, observation } = await setup(t, { native: failing });
+  const { session, sky, observation } = await setup(t, { native: failing, backend: 'sky' });
   sky.drag = async input => { sky.calls.push(['drag', input]); };
   // La fenêtre a un bouton Envoyer : le clic pourrait le viser, accord exigé.
   await assert.rejects(session.act(observation, { kind: 'click', screenshotId: 'shot', point: { x: 210, y: 210 } }),
@@ -456,11 +457,11 @@ test('a coordinate gesture with no element bounds under the point is judged on e
   await assert.rejects(session.act(await session.observe({ mode: 'both' }), { kind: 'drag', screenshotId: 'shot', from: { x: 1, y: 1 }, to: { x: 210, y: 210 } }), refused);
   assert.deepEqual(sky.calls, []);
   // Aucune action sortante ni irréversible dans la fenêtre : le clic reste libre.
-  const calm = await setup(t, { native: failing, tree: '0 fenêtre Dessin\n\t1 Bouton Enregistrer ID: save\n\t2 Texte Prêt ID: etat' });
+  const calm = await setup(t, { native: failing, backend: 'sky', tree: '0 fenêtre Dessin\n\t1 Bouton Enregistrer ID: save\n\t2 Texte Prêt ID: etat' });
   await calm.session.act(await calm.session.observe({ mode: 'both' }), { kind: 'click', screenshotId: 'shot', point: { x: 210, y: 210 } });
   assert.equal(calm.sky.calls.length, 1);
   // Rien de lu du tout (capture seule) : refus.
-  const blind = await setup(t, { native: failing });
+  const blind = await setup(t, { native: failing, backend: 'sky' });
   await assert.rejects(blind.session.act(await blind.session.observe({ mode: 'image' }), { kind: 'click', screenshotId: 'shot', point: { x: 210, y: 210 } }), /nothing is known under the point/);
   assert.deepEqual(blind.sky.calls, []);
 });
@@ -497,12 +498,12 @@ test('a tab typed in a document body still counts as a focus move (Gmail: Tab th
 test('no element under the point: a send control of any role is judged, and the body document is bound', async t => {
   const failing = { inspect: async () => { throw new Error('observation exceeds inspection bound'); } };
   const tree = body => `0 fenêtre Messagerie\n\t1 Groupe ID: composeur\n\t\t2 document Corps ID: corps Value: ${body}\n\t\t3 élément graphique Envoyer ID: envoyer`;
-  const { session, sky, observation } = await setup(t, { native: failing, tree: tree('Bonjour') });
+  const { session, sky, observation } = await setup(t, { native: failing, backend: 'sky', tree: tree('Bonjour') });
   let token;
   await assert.rejects(session.act(observation, { kind: 'click', screenshotId: 'shot', point: { x: 210, y: 210 }, confirm: true }),
     e => accordRequired(e) && e.summary.includes('Bonjour') && !!(token = e.accord));
   assert.deepEqual(sky.calls, []);
-  const other = await setup(t, { native: failing, tree: tree('Voici mon IBAN') });
+  const other = await setup(t, { native: failing, backend: 'sky', tree: tree('Voici mon IBAN') });
   await assert.rejects(other.session.act(other.observation, { kind: 'click', screenshotId: 'shot', point: { x: 210, y: 210 }, confirm: true, accord: token }),
     e => /changed since the accord \(content\)/.test(e.message));
 });
@@ -521,4 +522,47 @@ test('Tab then Space or Enter in one gesture is judged on every action button', 
   await assert.rejects(session.act(await session.observe(), { kind: 'typeText', focus: { automationId: 'message' }, text: 'ok\t ' }), e => refused(e) && /tabulation/.test(e.message));
   await session.act(await session.observe(), { kind: 'key', key: 'Tab' });
   assert.equal(sky.calls.length, 1);
+});
+
+test('Control_L/Control_R count as Ctrl for the key guard (relecture de Codex, 21/10)', () => {
+  assert.deepEqual(gardeFous.keyKinds('Control_L+Return'), ['send']);
+  assert.deepEqual(gardeFous.keyKinds('Control_R+Return'), ['send']);
+  assert.deepEqual(gardeFous.keyKinds('Shift_L+Return'), []);
+});
+
+test('every element under a point is returned for a native-capture gesture (Z-order may differ from depth)', () => {
+  const elements = [
+    { role: 'button', name: 'Aide', depth: 3, bounds: [100, 100, 20, 20] },
+    { role: 'button', name: 'Envoyer', depth: 2, bounds: [90, 90, 60, 40] },
+    { role: 'text', name: 'Loin', depth: 2, bounds: [300, 300, 10, 10] },
+  ];
+  assert.deepEqual(gardeFous.elementsAt(elements, 105, 105).map(e => e.name), ['Aide', 'Envoyer']);
+  assert.equal(gardeFous.elementAt(elements, 105, 105).name, 'Aide');
+});
+
+test('a window or pane under a native point is never a trigger: Cancel in a window titled "Envoyer un message" stays free', () => {
+  // Relecture de Codex (21/10) : elementsAt rend aussi les conteneurs ; le TITRE de la fenêtre devenait le déclencheur.
+  const elements = [
+    { index: 0, role: 'window', name: 'Envoyer un message', ancestors: [] },
+    { index: 1, role: 'pane', name: 'Envoyer un message', ancestors: [0] },
+    { index: 2, role: 'button', name: 'Annuler', ancestors: [0, 1] },
+  ];
+  assert.equal(gardeFous.triggerOf(elements[0], elements), null);
+  assert.equal(gardeFous.triggerOf(elements[1], elements), null);
+  assert.equal(gardeFous.triggerOf(elements[2], elements)?.name, 'Annuler');
+});
+
+test('an emergency stop AFTER partial background typing keeps the accord consumed and reports the partial input', async t => {
+  // Relecture de Codex du 22/10 : un STOP après des WM_CHAR était classé « rien d'envoyé » (accord rendu, rejouable).
+  const { stopRefusal } = await import('../lib/native.mjs');
+  const partial = stopRefusal('Emergency stop after input: 2 of 4 characters sent; outcome unknown, do not replay', 'EmergencyStopException');
+  assert.deepEqual([partial.afterInput, partial.deferred, partial.typed], [true, false, { characters: 2, total: 4 }]);
+  assert.equal(stopRefusal('Emergency stop requested; nothing was sent', 'EmergencyStopException').afterInput, undefined);
+  const { session } = await setup(t, { tree: MAIL, focus: 3, native: { call: async () => { throw partial; } } });
+  const typed = { kind: 'typeText', focus: { automationId: 'message' }, text: 'Oui\n' }; // saut de ligne = envoi : accord exigé
+  let token;
+  await assert.rejects(session.act(await session.observe(), { ...typed, confirm: true }), e => accordRequired(e) && !!(token = e.accord));
+  await assert.rejects(session.act(await session.observe(), { ...typed, confirm: true, accord: token }),
+    e => e.emergencyStop === true && e.afterInput === true && e.attempts.some(a => a.outcome === 'partial' && a.typed?.characters === 2));
+  await assert.rejects(session.act(await session.observe(), { ...typed, confirm: true, accord: token }), e => /already used/.test(e.message));
 });

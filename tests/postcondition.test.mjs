@@ -78,6 +78,19 @@ test('a batch refuses a trivial postcondition at validation, before its first st
   assert.equal(state.checked, false);
 });
 
+test('a postcondition on the same command in ANOTHER attested menu is not a restatement of the target', async t => {
+  // Relecture de Codex du 22/10 08:07 : la clé de sélecteur ignorait ancestor.window.
+  const { session, calls, observation } = await setup(t);
+  const copier = window => ({ role: 'menuitem', name: 'Copier', ancestor: { window } });
+  await assert.rejects(session.actBatch(observation, [{ kind: 'click', selector: copier(200), expect: { selector: copier(200), exists: true } }]),
+    /only restates the target/);
+  // Autre menu : pas une redite ; la suite (cible absente de ce formulaire) est jugée normalement, sans aucune entrée.
+  const other = await session.actBatch(await session.observe(), [{ kind: 'click', selector: copier(200), expect: { selector: copier(300), exists: true } }])
+    .then(result => JSON.stringify(result), error => error.message);
+  assert.doesNotMatch(other, /only restates the target/);
+  assert.equal(calls.length, 0);
+});
+
 test('a postcondition already true that does not depend on the action never skips it: refused, nothing sent', async t => {
   const { session, calls, observation } = await setup(t);
   // L'option « Bravo » existe toujours dans l'arbre (WinForms) : elle ne prouve pas l'ouverture de la liste.

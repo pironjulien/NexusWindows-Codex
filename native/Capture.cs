@@ -61,24 +61,16 @@ static class Capture
     }
 
     // Facteur entre la taille affichee (physique) et la taille dessinee par l'application.
-    static double Scale(nint hwnd)
+    internal static double Scale(nint hwnd)
     {
         var awareness = Win32.GetAwarenessFromDpiAwarenessContext(Win32.GetWindowDpiAwarenessContext(hwnd));
         if (awareness >= 2) return 1.0; // par ecran : dessine en pixels physiques
         var monitor = Win32.MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
         if (Win32.GetDpiForMonitor(monitor, 0 /* MDT_EFFECTIVE_DPI */, out var dpi, out _) != 0 || dpi == 0) return 1.0;
-        double drawn = 96;
-        if (awareness == 1) // DPI systeme du processus cible (au moment de son demarrage)
-        {
-            Win32.GetWindowThreadProcessId(hwnd, out var pid);
-            try
-            {
-                using var process = Process.GetProcessById((int)pid);
-                var system = Win32.GetSystemDpiForProcess(process.Handle);
-                if (system > 0) drawn = system;
-            }
-            catch (Exception error) when (error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception) { return 1.0; }
-        }
+        // DPI de dessin de CETTE fenetre (96 si non adaptee, DPI systeme de son contexte sinon), jamais celui du processus :
+        // un fil SYSTEM_AWARE d'un processus non adapte dessine a 120 (relecture de Codex du 22/10 07:59).
+        double drawn = Win32.GetDpiForWindow(hwnd);
+        if (drawn <= 0) return 1.0;
         var scale = dpi / drawn;
         return Math.Abs(scale - 1.0) < 0.01 ? 1.0 : scale;
     }

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-10-23 — Self-contained background input across Win32, WinForms, WPF and Chromium
+
+This release makes the helper a complete Windows driver of its own (real input, menus, dialogs, Settings, Explorer) and
+closes the gaps found on the common bench of the three NexusWindows tools (Claude, Codex, Antigravity).
+
+### Added
+- Common journal: every action is also written, one short line, to `%LOCALAPPDATA%\NexusJournal\windows\codex\` in
+  the format shared by the three NexusWindows tools; never screen text, typed values, titles or paths.
+- Real mouse and keyboard owned by the helper (`native/Physical.cs`, operation `physical`, SendInput), Sky only as a
+  fallback: click, double and right click, wheel, drag, keys and Unicode text, under the shared foreground token. The
+  target must come to the front (else nothing is sent); emergency stop, target and point re-read before each batch.
+- `key` in the background for Win32/WinForms: keys posted to the target thread's focus, with that thread's keyboard
+  layout (an AZERTY target no longer gets "&" for "1"); Alt and Windows keys refused; other frameworks fall back.
+- Native coordinate frame: each native capture has an `id` usable as `screenshotId` for `click` and `scroll`; the
+  window frame is re-read before input (moved window = refused) and outward-gesture checks apply to the point.
+- Wheel in WPF windows by UI Automation `ScrollPattern` on the innermost scrollable container under the point; position
+  re-read (changed = applied, unchanged = sent, already at the end = nothing sent).
+- Wheel in Chromium/Electron/Edge through DevTools when the target listens on its own `--remote-debugging-port`: the
+  page is proved active by briefly showing a random title in that exact window (under 0.5 s, original title always
+  restored and verified) and exactly one visible render surface must match the page size; otherwise nothing is sent.
+- Chromium "simulated activation": focus an editable surface, choose a `<select>` option by typing its label, and type
+  into fields and rich editors without taking the foreground; values re-read, partial typing reported, never replayed.
+- WinForms menus (MenuStrip, ContextMenuStrip) driven by the names of the path through UI Automation Invoke; each
+  segment searched directly under the previous one, homonyms refused, a submenu opened for the search is folded back.
+- Context menus: WinForms and WPF popups are recognised and reported in `obs.popups`; a right click returns the menu
+  it opened (`contextMenu`), and its commands are resolved inside that exact menu only.
+- Operation `activate`: an interaction lease brings the window forward through the helper, so a transient WPF menu can
+  be opened and chosen under the same lease.
+- `win.openSettings('ms-settings:…')`: opens a Settings page (only the `ms-settings:` scheme) and gives the foreground
+  back; `win.bindOpenedSettings()` binds that window even when Windows opens it hidden.
+- `win.openFolder(path)`: the bound Explorer window goes to an existing absolute folder through the shell (no keyboard,
+  no foreground); single-tab windows only, arrival re-read and folders compared by their on-disk file identity.
+- Click traces (`trace`): target window, thread, points, posted messages and the window actually under the point.
+- Self-tests: `--cdp-selftest`, `--wheel-selftest`, `--prove-selftest`, `--prove-live-selftest`, `--menu-selftest`,
+  `--chromium-selftest`, `--popup-selftest` and others, plus Node tests for page choice and wheel planning.
+
+### Fixed
+- Whole helper is per-monitor DPI aware: the UI Automation tree was read in virtualised coordinates at 125 % while
+  capture and gestures used real pixels, so a right click aimed at a list landed on the form.
+- Posted clicks are converted to the coordinate system the window reads (logical pixels for non-DPI-aware windows);
+  ListBox item rectangles are scaled accordingly.
+- Open/Save dialogs that Sky does not list (WinUI Notepad, Paint) are followed when proved owned by the bound window
+  and of the same process; read, captured and driven by the helper only, identity re-checked before each read.
+- A bound window closed by the action (Alt+F4, Close button) is reported as `closed`, not as an unknown outcome; an
+  unreadable state or a hidden window never counts as closed.
+- WinForms double click on a covered control is refused before sending (WinForms only raises DoubleClick when the
+  control is under the point); the real mouse takes over briefly when allowed.
+- Foreground return after a posted gesture that activates the target: held under the shared token, and never done if
+  the user touched keyboard or mouse in the meantime; no more queued `SC_HOTKEY` that could reactivate a window later.
+- A helper that dies while holding the foreground token makes the action unknown, never a success; only an explicit
+  `released` acknowledgement proves a normal release.
+- An interaction that expires during preparation sends nothing; typing stops at the next grapheme when it expires.
+- `fallback:false` now forbids every physical input, including when no background technique applies.
+- WinForms push buttons get a posted `BN_CLICKED` (UI Automation Invoke blocked on a modal opened by the button);
+  single-selection ListBox items are read and chosen by messages instead of unstable UI Automation identities.
+- Name selectors: a static label with the same name as a single control no longer makes it ambiguous.
+- Edge with tabs is recognised from its window title; a test title that cannot be cleaned up is a terminal refusal.
+- Window or pane titles are no longer treated as triggers ("Cancel" in a window titled "Send a message").
+
+### Changed
+- "Agent at work" indicator: the blue halo is gone; only the logo spins, with its drop shadow.
+- Posted keys no longer carry any modifier; Ctrl shortcuts go through the physical fallback or a semantic command.
+
+### Known limits
+- A posted gesture is watched for 300 ms under the token; a target busy longer may still activate itself afterwards.
+- DevTools wheel needs a page whose title shows in its window and a single visible render surface (multi-view
+  Electron apps are refused).
+
 ## [1.8.0] - 2026-10-20 — Accord bound to the exact action
 
 ### Changed

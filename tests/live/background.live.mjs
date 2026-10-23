@@ -314,11 +314,26 @@ test('live background validation on self-created covered windows', { skip: !exec
       });
     });
 
-    // Confirmation étanche : « Envoyer » exige confirm:true, quel que soit le geste (clic par sélecteur ou en
+    // Confirmation étanche : « Envoyer » exige confirm:true + accord, quel que soit le geste (clic par sélecteur ou en
     // coordonnées, Entrée vers le bouton par défaut, Ctrl+Entrée, Alt+E, saut de ligne tapé, menu) ; rien n'est envoyé
-    // (compteurs de l'application intacts). Avec confirm:true, un seul envoi, en arrière-plan.
-    await t.test('garde-fous: sending needs confirm whatever the gesture; confirm:true sends exactly once', async () => {
+    // (compteurs de l'application intacts). Le jeton simule l'accord uniquement dans nos fixtures locales :
+    // leurs boutons incrémentent un compteur, aucune communication réelle n'est possible.
+    await t.test('garde-fous: every send gesture needs an exact accord; a fixture accord sends exactly once', async () => {
       const refusedHere = what => error => error.confirmationRequired === true || assert.fail(`${what}: ${error.message}`);
+      const fixtureAccord = async request => {
+        const obs = await session.observe();
+        assert.ok([ready.winforms, ready.win32, ready.wpf].includes(obs.window.id), 'test accord only for this run\'s local fixtures');
+        let accord;
+        await assert.rejects(session.act(obs, { ...request, confirm: true }), error => {
+          assert.equal(error.confirmationRequired, true);
+          assert.equal(error.accordRequired, true);
+          assert.equal(error.beforeInput, true);
+          assert.match(error.accord, /^[0-9a-f]{8}$/);
+          accord = error.accord;
+          return true;
+        });
+        return { ...request, confirm: true, accord };
+      };
       for (const [id, family, send, counter, field, statusId] of [
         [ready.winforms, 'WinForms', { automationId: 'envoyer' }, 'winforms.sends', { automationId: 'nom', role: 'edit' }, 'etat'],
         [ready.win32, 'Win32', { name: 'Envoyer', role: 'button' }, 'win32.sends', { automationId: '103', role: 'edit' }, '106'],
@@ -338,13 +353,17 @@ test('live background validation on self-created covered windows', { skip: !exec
         await assert.rejects(session.act(obs, { kind: 'click', screenshotId: sky.shot.id, point: { x: bx + bw / 2 - rx, y: by + bh / 2 - ry } }), refusedHere(`${family} coordinates`));
         sky.shot = null;
         assert.equal((await state())[counter], undefined, `${family}: nothing sent before confirm`);
-        await background(`${family} send confirmed`, await session.observe(), { kind: 'click', selector: send, confirm: true, expect: text(statusId, 'Envoyé 1') });
+        const request = await fixtureAccord({ kind: 'click', selector: send, expect: text(statusId, 'Envoyé 1') });
+        assert.equal((await state())[counter], undefined, `${family}: confirm:true alone sent nothing`);
+        await background(`${family} fixture send with exact accord`, await session.observe(), request);
         assert.equal((await state())[counter], 1);
       }
       await session.bind({ id: ready.win32 });
       await assert.rejects(session.act(await session.observe(), { kind: 'menu', path: 'Fichier > Envoyer' }), refusedHere('Win32 menu'));
       assert.equal((await state())['win32.menuSends'], undefined);
-      await background('Win32 menu send confirmed', await session.observe(), { kind: 'menu', path: 'Fichier > Envoyer', confirm: true, expect: text('106', 'Menu envoyé 1') }, { technique: /^background:messages$/ });
+      const menuRequest = await fixtureAccord({ kind: 'menu', path: 'Fichier > Envoyer', expect: text('106', 'Menu envoyé 1') });
+      assert.equal((await state())['win32.menuSends'], undefined, 'menu: confirm:true alone sent nothing');
+      await background('Win32 fixture menu send with exact accord', await session.observe(), menuRequest, { technique: /^background:messages$/ });
       assert.equal((await state())['win32.menuSends'], 1);
     });
 

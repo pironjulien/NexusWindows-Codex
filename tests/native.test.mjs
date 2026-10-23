@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
-import { NativeUIA } from '../lib/native.mjs';
+import { NativeUIA, actionTimeoutMs, TOKEN_WAIT_MS, CHROMIUM_BUDGET_MS, CLEANUP_MS, ACTION_TIMEOUT_MS } from '../lib/native.mjs';
 import { policyPath } from '../lib/garde-fous.mjs';
 
 const window = { id: 1, app: 'transport-fixture' };
@@ -71,4 +71,11 @@ test('oversized requests and invalid timeouts are refused before a worker action
 test('the helper receives the shared garde-fous policy path (it refuses every window request without it)', async t => {
   const native = worker(t);
   assert.equal((await native.inspect(window)).policy, policyPath());
+});
+
+test('a background action that may hold the token gets a Node timeout covering token, full Chromium budget and cleanup', () => {
+  // Relecture de Codex du 22/10 (P2-10) : sinon Node tuerait le helper avant son nettoyage (désactivation, premier plan).
+  const floor = TOKEN_WAIT_MS + CHROMIUM_BUDGET_MS + CLEANUP_MS;
+  for (const operation of ['typeText', 'select', 'click']) assert.ok(actionTimeoutMs(operation, { mode: 'background' }, ACTION_TIMEOUT_MS) > floor, operation);
+  assert.equal(actionTimeoutMs('inspect', {}, ACTION_TIMEOUT_MS), ACTION_TIMEOUT_MS);
 });
