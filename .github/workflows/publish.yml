@@ -81,7 +81,16 @@ jobs:
         run: npm install --global npm@11.6.2
       - name: Publish with provenance
         shell: bash
-        run: npm publish dist/*.tgz --access public --provenance
+        # A version already on npm (published by hand, or a re-run) is left as is, so the registry step can still run.
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('server.json'))['version'])" 2>/dev/null || true)
+          tarball=$(ls dist/*.tgz)
+          version=${version:-$(basename "$tarball" .tgz | sed 's/^nexus-windows-codex-//')}
+          if npm view "nexus-windows-codex@$version" version >/dev/null 2>&1; then
+            echo "nexus-windows-codex $version is already on npm: nothing to publish"
+          else
+            npm publish "$tarball" --access public --provenance
+          fi
 
   registry:
     # After the version reaches npm: server.json to the official MCP registry. mcp-publisher pinned by version and
