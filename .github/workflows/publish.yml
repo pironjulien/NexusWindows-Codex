@@ -50,6 +50,7 @@ jobs:
         run: |
           node --test tests/*.test.mjs
           if ($LASTEXITCODE) { throw 'Tests failed' }
+          New-Item -ItemType Directory -Force dist | Out-Null  # npm pack does not create its destination
           npm pack --pack-destination dist
           if ($LASTEXITCODE) { throw 'npm pack failed' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
