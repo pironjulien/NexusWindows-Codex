@@ -9,13 +9,27 @@ sealed class CaptureUnavailableException(string message) : InvalidOperationExcep
 // Une application non adaptee au DPI se dessine a sa taille logique : bitmap a cette taille, agrandi ensuite a la
 // taille affichee (sinon contenu a 80 % et bande noire, mesure NexusClaude). Image uniforme = vide : la session se
 // replie alors sur la capture Sky (Windows.Graphics.Capture).
+// Regle image commune des produits Nexus (24/10) : cote long <= 1568 px et <= 1,15 Mpx (limite standard de Claude, sans
+// reduction de sa part ; GPT-5.x et Gemini 3 lisent la meme), WebP sans perte (WebP.cs) ; au-dela de 200 Ko, quasi sans
+// perte (2 bits de poids faible par canal) ; jamais plus de 500 Ko (reduction supplementaire). L'image peut donc etre
+// plus petite que la fenetre : `frame` reste le cadre ECRAN et un point x,y de l'image vise
+// frame.left + x * frame.width / width (session.mjs).
 static class Capture
 {
+    const int MaxSide = 1568;
+    const double MaxPixels = 1.15e6;
+    const int LosslessBudget = 200 * 1024, HardLimit = 500 * 1024;
+
     const uint PW_RENDERFULLCONTENT = 2;
     const int DWMWA_EXTENDED_FRAME_BOUNDS = 9;
     static readonly nint PerMonitorAwareV2 = -4;
 
-    public static object Window(nint hwnd, string directory)
+    // zoom : zone ECRAN [left, top, width, height] (pixels physiques) lue en pleine resolution et agrandie jusqu'a x2
+    // (petit texte), dans les memes plafonds ; `frame` est alors cette zone, et un point de l'image zoomee vise l'ecran
+    // comme pour toute image native (nativeScreen).
+    const double ZoomMaxEnlarge = 2.0;
+
+    public static object Window(nint hwnd, string directory, int[]? zoom = null)
     {
         if (!Path.IsPathFullyQualified(directory)) throw new InvalidOperationException("Capture directory must be absolute");
         foreach (var variable in new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" })
@@ -40,21 +54,37 @@ static class Capture
             var crop = frame.Intersect(window);
             if (crop.Empty) crop = window;
             pixels = Crop(pixels, width, crop.Left - window.Left, crop.Top - window.Top, crop.Width, crop.Height);
+            var enlarge = 1.0;
+            var windowArea = crop; // cadre ENTIER de la fenetre : celui que les gardes de mouvement comparent (Pointer, Physical)
+            if (zoom != null)
+            {
+                if (zoom.Length != 4 || zoom[2] <= 0 || zoom[3] <= 0) throw new ActionRefusedException("Zoom area must be [left, top, width, height] with a size");
+                var area = new Win32.Rect { Left = zoom[0], Top = zoom[1], Right = zoom[0] + zoom[2], Bottom = zoom[1] + zoom[3] }.Intersect(crop);
+                if (area.Empty) throw new ActionRefusedException("Zoom area is outside the window");
+                pixels = Crop(pixels, crop.Width, area.Left - crop.Left, area.Top - crop.Top, area.Width, area.Height);
+                crop = area;
+                enlarge = ZoomMaxEnlarge;
+            }
             var (deviation, uniformity) = Statistics(pixels, crop.Width, crop.Height);
             var blank = deviation < 1.5;
             string? file = null;
+            int imageWidth = crop.Width, imageHeight = crop.Height;
+            var encoding = "";
             if (!blank)
             {
+                var (bytes, w, h, how) = Encode(pixels, crop.Width, crop.Height, enlarge);
+                imageWidth = w; imageHeight = h; encoding = how;
                 Directory.CreateDirectory(directory);
-                file = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".png");
-                File.WriteAllBytes(file, Png(pixels, crop.Width, crop.Height));
+                file = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".webp");
+                File.WriteAllBytes(file, bytes);
             }
             var method = scale == 1.0 ? "printwindow" : "printwindow-dpi-scaled";
             return new
             {
-                ok = true, method, path = file, width = crop.Width, height = crop.Height, scale, blank,
+                ok = true, method, path = file, width = imageWidth, height = imageHeight, scale, blank, encoding, mimeType = "image/webp",
                 deviation = Math.Round(deviation, 2), uniformity = Math.Round(uniformity, 3), ms = timer.ElapsedMilliseconds,
                 frame = new { left = crop.Left, top = crop.Top, width = crop.Width, height = crop.Height },
+                windowFrame = new { left = windowArea.Left, top = windowArea.Top, width = windowArea.Width, height = windowArea.Height },
             };
         }
         finally { Win32.SetThreadDpiAwarenessContext(previous); }
@@ -98,6 +128,66 @@ static class Capture
             finally { Win32.SelectObject(dc, old); Win32.DeleteObject(bitmap); }
         }
         finally { Win32.DeleteDC(dc); }
+    }
+
+    // Taille et encodage de l'image envoyee au modele (regle commune ci-dessus).
+    static (byte[] Bytes, int Width, int Height, string How) Encode(byte[] pixels, int width, int height, double enlarge = 1.0)
+    {
+        var fit = Math.Min(enlarge, Math.Min(MaxSide / (double)Math.Max(width, height), Math.Sqrt(MaxPixels / ((double)width * height))));
+        for (var attempt = 0; ; attempt++)
+        {
+            int w = Math.Max(1, (int)Math.Floor(width * fit)), h = Math.Max(1, (int)Math.Floor(height * fit));
+            var image = w == width && h == height ? pixels : w > width ? Resize(pixels, width, height, w, h) : Shrink(pixels, width, height, w, h);
+            var bytes = WebP.Lossless(image, w, h);
+            var how = "webp-lossless";
+            if (bytes.Length > LosslessBudget)
+            {
+                bytes = WebP.Lossless(Quantize(image), w, h);
+                how = "webp-near-lossless";
+            }
+            if (bytes.Length <= HardLimit || w <= 64 || attempt >= 8) return (bytes, w, h, how + (fit != 1.0 ? $"-{w}x{h}" : ""));
+            fit *= 0.85;
+        }
+    }
+
+    // Quasi sans perte : 2 bits de poids faible de chaque canal mis a zero (ecart <= 3 sur 255, texte intact).
+    static byte[] Quantize(byte[] bgra)
+    {
+        var result = (byte[])bgra.Clone();
+        for (var i = 0; i < result.Length; i++) if ((i & 3) != 3) result[i] = (byte)(result[i] & 0xFC);
+        return result;
+    }
+
+    // Reduction par moyenne de surface (BGRA) : chaque pixel d'arrivee moyenne les pixels sources qu'il couvre.
+    static byte[] Shrink(byte[] source, int sw, int sh, int dw, int dh)
+    {
+        var result = new byte[dw * dh * 4];
+        var sx = (double)sw / dw;
+        var sy = (double)sh / dh;
+        for (var y = 0; y < dh; y++)
+        {
+            double top = y * sy, bottom = Math.Min(sh, (y + 1) * sy);
+            for (var x = 0; x < dw; x++)
+            {
+                double left = x * sx, right = Math.Min(sw, (x + 1) * sx);
+                double b = 0, g = 0, r = 0, total = 0;
+                for (var yy = (int)top; yy < Math.Ceiling(bottom); yy++)
+                {
+                    var wy = Math.Min(bottom, yy + 1) - Math.Max(top, yy);
+                    for (var xx = (int)left; xx < Math.Ceiling(right); xx++)
+                    {
+                        var wx = Math.Min(right, xx + 1) - Math.Max(left, xx);
+                        var weight = wx * wy;
+                        var i = (yy * sw + xx) * 4;
+                        b += source[i] * weight; g += source[i + 1] * weight; r += source[i + 2] * weight; total += weight;
+                    }
+                }
+                var o = (y * dw + x) * 4;
+                result[o] = (byte)Math.Round(b / total); result[o + 1] = (byte)Math.Round(g / total);
+                result[o + 2] = (byte)Math.Round(r / total); result[o + 3] = 255;
+            }
+        }
+        return result;
     }
 
     // Agrandissement bilineaire BGRA (application non adaptee au DPI).

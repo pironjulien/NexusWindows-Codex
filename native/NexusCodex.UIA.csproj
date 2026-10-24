@@ -7,6 +7,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>NexusCodex.UIA</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Sorties d'une compilation faite dans ce dossier (obj, bin) : jamais compilees comme sources quand l'installeur
+         deporte BaseIntermediateOutputPath hors de OneDrive (AssemblyInfo en double, relecture de Codex du 24/10). -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <!-- Logo de l'indicateur « agent au travail » (BusyIndicator.cs), lu a cote de l'executable. -->

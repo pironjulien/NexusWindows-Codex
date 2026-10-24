@@ -101,7 +101,7 @@ the JavaScript module cache does not reload.
 | Tool | Purpose |
 |---|---|
 | `windows(filter)` | Application windows (id, app, title, pid), like the taskbar; password managers never listed |
-| `look(window, mode)` | One window by id or a unique part of its title or app: UI Automation tree, plus a capture that works on covered windows with `mode="image"` or `"both"`; selects the window for `act` |
+| `look(window, mode, region)` | One window by id or a unique part of its title or app: UI Automation tree, plus a capture that works on covered windows with `mode="image"` or `"both"`; `region` zooms on an area of the last image; selects the window for `act` |
 | `act(steps)` | One step, or up to 32 each with its own `expect`, on the window of the last `look`; stops at the first step not verified |
 | `launch(app)` | Start an application (name, path, Store app id), a folder, a document or a Settings page (`ms-settings:`) and give the foreground back |
 | `window(action, window)` | `action="close"`: one close message, read back; a "save?" prompt is reported, never answered |
@@ -195,9 +195,14 @@ its option element.
 `observe({mode:'image', capture:'native'})` captures the bound window with `PrintWindow(PW_RENDERFULLCONTENT)`
 without bringing it forward, even when covered: per-monitor DPI aware, cropped to the DWM frame, DPI-unaware windows
 drawn at their logical size and scaled. In the Codex skill, a blank, minimized or failed capture falls back to Sky's
-screenshot; the MCP server has no such fallback and reports the failure. Native images are local PNG files (32 files
-at most, removed after 10 minutes at the next capture, at server start and at a clean stop): evidence for the model,
-and the coordinate frame of a point action that names the image (`screenshotId`).
+screenshot; the MCP server has no such fallback and reports the failure. Native images follow the common Nexus image
+rule: at most 1568 px and 1.15 MP, lossless WebP from a built-in encoder (near-lossless above 200 KB, never over
+500 KB), local files (32 at most, removed after 10 minutes at the next capture, at server start and at a clean stop):
+evidence for the model, and the coordinate frame of a point action that names the image (`screenshotId`), scaled back
+to the screen pixel. `look(region=[x1, y1, x2, y2])` reads an area of the last full image at full resolution, enlarged
+up to 2x for small text; its own `screenshotId` takes points. An image identical to the last one sent for that window
+(same pixels and frame) is not attached again; the reply names the id that takes points, and `mode="image"` always
+attaches it.
 
 ### Verified batches (`actBatch`)
 

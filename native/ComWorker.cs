@@ -23,16 +23,29 @@ static class ComWorker
                 using var json = JsonDocument.Parse(line);
                 result = Execute(json.RootElement);
             }
-            catch (Exception error) { result = new { ok = false, error = error.GetType().Name, message = error.Message }; }
+            // beforeInput : refus leve avant tout appel de motif (Before) ; le helper le rend « rien envoye ».
+            catch (Exception error) { result = new { ok = false, error = error.GetType().Name, message = error.Message, beforeInput = error.Data["beforeInput"] is true }; }
             Console.WriteLine(JsonSerializer.Serialize(result));
             Console.Out.Flush();
         }
         return 0;
     }
 
+    // Frontiere de la requete : faux tant qu'aucun appel pouvant agir (motif, focus) n'a ete tente. Un arret d'urgence
+    // avant elle est marque « avant tout motif » (relecture de Codex du 24/10) ; apres, l'issue reste inconnue.
+    [ThreadStatic] static bool Acted;
+    static void BeforeAct()
+    {
+        try { EmergencyStop.ThrowIfStopped(); }
+        catch (EmergencyStopException error) when (!Acted) { error.Data["beforeInput"] = true; throw; }
+        Acted = true;
+    }
+
     static object Execute(JsonElement request)
     {
-        EmergencyStop.ThrowIfStopped();
+        Acted = false;
+        try { EmergencyStop.ThrowIfStopped(); }
+        catch (EmergencyStopException error) { error.Data["beforeInput"] = true; throw; } // rien appele encore
         var op = request.GetProperty("op").GetString();
         var window = (nint)request.GetProperty("windowId").GetInt64();
         if (op == "scrollAt") return ScrollAt(window, request);
@@ -43,18 +56,28 @@ static class ComWorker
         // Avant le motif, tout echec (fenetre ou element disparus, fournisseur absent) precede l'entree.
         nint element;
         var hint = request.TryGetProperty("nativeWindow", out var h) && h.ValueKind == JsonValueKind.Number ? (nint)h.GetInt64() : 0;
-        try { element = ComUia.Shared.FindByRuntimeId(window, runtimeId, hint); }
-        catch (Exception error) when (error is not (BackgroundNotApplicableException or EmergencyStopException))
+        try
         {
-            throw new BackgroundNotApplicableException("UI Automation element unavailable before input: " + error.Message);
+            EmergencyStop.ThrowIfStopped();
+            element = ComUia.Shared.FindByRuntimeId(window, runtimeId, hint);
+        }
+        catch (Exception error) when (error is BackgroundNotApplicableException or EmergencyStopException)
+        {
+            // Cible disparue ou arret d'urgence avant tout motif : meme marque (relecture de Codex du 24/10).
+            error.Data["beforeInput"] = true;
+            throw;
+        }
+        catch (Exception error)
+        {
+            throw Before("UI Automation element unavailable before input: " + error.Message);
         }
         try
         {
             var outcome = op switch
             {
                 "click" => Click(element, request.GetProperty("order").EnumerateArray().Select(e => e.GetString() ?? "").ToArray()),
-                "invoke" => WithPattern(element, ComUia.InvokePatternId, p => { EmergencyStop.ThrowIfStopped(); ComUia.CallSlot(p, 3); return new Outcome(Uia, "Invoke", "sent"); },
-                    () => throw new BackgroundNotApplicableException("No InvokePattern")),
+                "invoke" => WithPattern(element, ComUia.InvokePatternId, p => { BeforeAct(); ComUia.CallSlot(p, 3); return new Outcome(Uia, "Invoke", "sent"); },
+                    () => throw Before("No InvokePattern")),
                 "setFocus" => SetFocus(element),
                 "takeFocus" => TakeFocus(element),
                 "caretToEnd" => CaretToEnd(element),
@@ -73,7 +96,7 @@ static class ComWorker
     // « none » (rien n'est tape ensuite).
     static Outcome TakeFocus(nint element)
     {
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.TakeFocus(element);
         var clock = Stopwatch.StartNew();
         while (clock.ElapsedMilliseconds < 500)
@@ -85,13 +108,13 @@ static class ComWorker
     }
     static Outcome CaretToEnd(nint element)
     {
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.CaretToEnd(element);
         return new(Uia, "TextRange caret to end", "applied");
     }
     static Outcome SetFocus(nint element)
     {
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.SetFocus(element);
         return new("foreground:uia", "SetFocus", ComUia.HasKeyboardFocus(element) ? "applied" : "sent");
     }
@@ -242,6 +265,14 @@ static class ComWorker
         }
     }
 
+    // Refus leve avant tout appel de motif de cette requete : marque, transmis au helper (beforeInput), qui le rend
+    // « rien envoye » (relecture de Codex du 24/10).
+    internal static BackgroundNotApplicableException Before(string message)
+    {
+        var error = new BackgroundNotApplicableException(message);
+        error.Data["beforeInput"] = true;
+        return error;
+    }
     static T WithPattern<T>(nint element, int patternId, Func<nint, T> action, Func<T> missing)
     {
         var pattern = ComUia.Pattern(element, patternId);
@@ -251,13 +282,13 @@ static class ComWorker
     static Outcome Toggle(nint pattern)
     {
         var before = ComUia.ReadInt(pattern, 4);
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.CallSlot(pattern, 3);
         return new(Uia, "Toggle", ComUia.ReadInt(pattern, 4) != before ? "applied" : "none");
     }
     static Outcome Select(nint pattern)
     {
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.CallSlot(pattern, 3);
         return new(Uia, "SelectionItem.Select", ComUia.ReadInt(pattern, 6) != 0 ? "applied" : "none");
     }
@@ -268,23 +299,23 @@ static class ComWorker
             Outcome? outcome = name switch
             {
                 "toggle" => WithPattern<Outcome?>(element, ComUia.TogglePatternId, p => Toggle(p), () => null),
-                "invoke" => WithPattern<Outcome?>(element, ComUia.InvokePatternId, p => { EmergencyStop.ThrowIfStopped(); ComUia.CallSlot(p, 3); return new(Uia, "Invoke", "sent"); }, () => null),
+                "invoke" => WithPattern<Outcome?>(element, ComUia.InvokePatternId, p => { BeforeAct(); ComUia.CallSlot(p, 3); return new(Uia, "Invoke", "sent"); }, () => null),
                 "select" => WithPattern<Outcome?>(element, ComUia.SelectionItemPatternId, p => Select(p), () => null),
                 _ => null,
             };
             if (outcome is { } done) return done;
         }
-        throw new BackgroundNotApplicableException("No background click pattern (Invoke, Toggle or SelectionItem) for this control");
+        throw Before("No background click pattern (Invoke, Toggle or SelectionItem) for this control"); // aucun motif appele
     }
     static Outcome SetValue(nint element, string value) => WithPattern(element, ComUia.ValuePatternId, pattern =>
     {
-        if (ComUia.ReadInt(pattern, 5) != 0) throw new BackgroundNotApplicableException("Read-only value");
+        if (ComUia.ReadInt(pattern, 5) != 0) throw Before("Read-only value");
         var before = ComUia.Value(pattern);
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.SetValue(pattern, value);
         var after = ComUia.Value(pattern);
         return new Outcome(Uia, "Value.SetValue", after == value ? "applied" : after == before ? "none" : "sent");
-    }, () => throw new BackgroundNotApplicableException("No writable ValuePattern"));
+    }, () => throw Before("No writable ValuePattern"));
     // Etat relu par le motif ExpandCollapse (0 replie, 1 deplie, 2 partiel, 3 feuille), attendu au plus 0,5 s : certains
     // fournisseurs (WPF) ouvrent leur surgissante de facon asynchrone.
     static int WaitState(nint pattern, Func<int, bool> reached)
@@ -296,12 +327,12 @@ static class ComWorker
     static Outcome ExpandCollapse(nint element, string action) => WithPattern(element, ComUia.ExpandCollapsePatternId, pattern =>
     {
         var before = ComUia.ReadInt(pattern, 5);
-        EmergencyStop.ThrowIfStopped();
+        BeforeAct();
         ComUia.CallSlot(pattern, action == "Expand" ? 3 : 4);
         Func<int, bool> reached = action == "Expand" ? s => s is 1 or 2 : s => s == 0;
         var state = WaitState(pattern, reached);
         return new Outcome(Uia, action, reached(state) ? "applied" : state == before ? "none" : "sent");
-    }, () => throw new BackgroundNotApplicableException("No ExpandCollapsePattern"));
+    }, () => throw Before("No ExpandCollapsePattern"));
 
     // Option d'une liste deroulante (conteneur) choisie par SelectionItem, puis la liste refermee : une liste laissee
     // ouverte est une surgissante au-dessus des fenetres de Julien (un clic de sa part y choisirait une option).
@@ -310,7 +341,7 @@ static class ComWorker
         var container = ComUia.Shared.FindByRuntimeId(window, containerRuntimeId);
         try
         {
-            var selected = WithPattern(item, ComUia.SelectionItemPatternId, Select, () => throw new BackgroundNotApplicableException("Option is not selectable"));
+            var selected = WithPattern(item, ComUia.SelectionItemPatternId, Select, () => throw Before("Option is not selectable"));
             return Close(container, selected with { Mechanism = "SelectionItem.Select" });
         }
         finally { ComUia.Release(container); }
@@ -323,12 +354,14 @@ static class ComWorker
         var expand = ComUia.Pattern(container, ComUia.ExpandCollapsePatternId);
         try
         {
-            var item = FindOption(container, option, allowAbsent: expand != 0);
+            nint item;
+            try { item = FindOption(container, option, allowAbsent: expand != 0); }
+            catch (BackgroundNotApplicableException error) { error.Data["beforeInput"] = true; throw; } // rien deplie encore
             var opened = false;
             if (item == 0)
             {
-                EmergencyStop.ThrowIfStopped();
-                if (ComUia.ReadInt(expand, 5) != 0) throw new BackgroundNotApplicableException("Option is absent from the list");
+                BeforeAct();
+                if (ComUia.ReadInt(expand, 5) != 0) throw Before("Option is absent from the list"); // rien deplie encore
                 ComUia.CallSlot(expand, 3);
                 opened = true;
                 for (var i = 0; i < 10 && item == 0; i++)
@@ -444,13 +477,22 @@ static class ComBridge
         string Text(string key) => reply.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
         if (reply.GetProperty("ok").GetBoolean()) return new(Text("technique"), Text("mechanism"), Text("effect"));
         var message = Text("message");
+        var before = reply.TryGetProperty("beforeInput", out var b) && b.ValueKind == JsonValueKind.True;
         throw Text("error") switch
         {
+            nameof(BackgroundNotApplicableException) when before => ComWorker.Before(message),
             nameof(BackgroundNotApplicableException) => new BackgroundNotApplicableException(message),
             nameof(ActionRefusedException) => new ActionRefusedException(message),
-            nameof(EmergencyStopException) => new EmergencyStopException(message),
+            nameof(EmergencyStopException) => Stop(message, before),
             _ => new InvalidOperationException(message + " (outcome unknown)"),
         };
+    }
+    // Arret d'urgence du processus COM, avec sa marque « avant tout motif » s'il l'avait (FirstCall la lit).
+    static EmergencyStopException Stop(string message, bool beforeInput)
+    {
+        var error = new EmergencyStopException(message);
+        if (beforeInput) error.Data["beforeInput"] = true;
+        return error;
     }
 
     static Process Start()

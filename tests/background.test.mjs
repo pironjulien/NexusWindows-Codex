@@ -1009,3 +1009,23 @@ test('in an open interaction, a helper that died while the Node loop was busy ma
   await assert.rejects(session.act(observation, { kind: 'key', key: 'a', expect: expectDone }), /unknown/);
   await session.endInteraction().catch(() => {});
 });
+
+test('a zoomed native image aims through its own frame but the move guard gets the whole window frame', async t => {
+  // Relecture de Codex du 24/10 : le cadre recadré du zoom était envoyé comme cadre de fenêtre, et la garde refusait.
+  const shot = { path: 'z.webp', width: 200, height: 200, method: 'printwindow', scale: 1, ms: 5,
+    frame: { left: 200, top: 100, width: 100, height: 100 }, windowFrame: { left: 100, top: 50, width: 400, height: 300 } };
+  const calls = [];
+  const native = {
+    async capture() { return shot; },
+    async call(_w, op, args) {
+      calls.push([op, args]);
+      if (op !== 'physical') throw notApplicable('This interface ignores posted mouse input');
+      return { ok: true, technique: 'physical:native', mechanism: `SendInput ${args.action}`, effect: 'sent', foregroundTaken: true };
+    },
+  };
+  const { session } = await setup(t, { native });
+  const obs = await session.observe({ mode: 'both', capture: 'native', zoom: [200, 100, 100, 100] });
+  assert.equal(obs.images[0].zoom, true);
+  await session.act(obs, { kind: 'click', screenshotId: obs.images[0].id, point: { x: 10, y: 20 }, button: 'right', count: 1 });
+  assert.deepEqual(calls.at(-1), ['physical', { action: 'click', x: 205, y: 110, frame: [100, 50, 400, 300], button: 'right', count: 1 }]);
+});

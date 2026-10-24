@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-10-24 — Tk in the background, common image rule, zoom
+
+### Added
+- Tk in the background, window covered: a click at a point is sent with the mouse button marked pressed for Tk's own
+  thread only (press and release owned by a helper thread); lists scroll through their native scroll bar, read back
+  (recipe shared with NexusWindows for Claude).
+- `look(region=[x1, y1, x2, y2])`: an area of the last full native image, read at full resolution and enlarged up to
+  2x, within the same caps; the zoomed image has its own frame, so its points work with its own `screenshotId`, while
+  the move guard keeps checking the whole window frame. An area outside the window is refused.
+- No duplicate image: same WebP bytes (deterministic encoder, so same pixels), size and frame as the last image sent for
+  that window or zoom: not attached again; the reply names the id that takes points; `mode="image"` always attaches it.
+  The zoom reference only follows images the model actually received.
+- `launch` of a Chromium/Electron executable by its path: started with the switches that keep it drawn while covered.
+
+### Changed
+- Native images follow the common Nexus image rule: at most 1568 px and 1.15 MP (area-average reduction), lossless
+  WebP from a built-in VP8L encoder (no dependency; checked pixel-exact against libwebp), near-lossless above 200 KB,
+  never over 500 KB. A point on a reduced image is scaled back to the exact screen pixel, the same one the guards check.
+
+### Fixed
+- Outcome classification: once any input may have left, a failure is an unknown outcome (never replayed, no fallback,
+  accord consumed); a refusal raised before any input (applicability checks, the foreground token wait, the user's
+  pause, the emergency stop, a COM refusal before any pattern call, Chromium before its first activation message) is
+  "nothing sent", so the planned fallback stays available.
+- The emergency stop is checked between Tk scroll lines and is never masked by the end-of-scroll cleanup.
+
+### Security
+- Reviewed by the Codex agent over many rounds (partial input, held press ownership, frames of zoomed images, outcome
+  classification before and after input).
+
 ## [3.0.1] - 2026-10-23 — Family naming, release with provenance
 
 ### Changed

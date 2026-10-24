@@ -57,22 +57,24 @@ static partial class Program
     static Outcome ForegroundAction(string op, Node target, nint window, JsonElement request, out bool? taken, out string? giveBack)
     {
         taken = null; giveBack = null;
-        if (op != "click") throw new BackgroundNotApplicableException("Only a semantic click has a foreground UI Automation path");
-        if (ComUia.IsSynthetic(target.RuntimeId)) throw new BackgroundNotApplicableException("Combo box options read by messages have no UI Automation path");
+        InputStarted = false; // attentes et controles ci-dessous avant toute entree (relecture de Codex du 24/10)
+        if (op != "click") throw NothingSent("Only a semantic click has a foreground UI Automation path");
+        if (ComUia.IsSynthetic(target.RuntimeId)) throw NothingSent("Combo box options read by messages have no UI Automation path");
         // Elements de liste Win32 servis par MSAA : leur action par defaut est un double clic par SendInput.
-        if (target.FrameworkId == "Win32" && target.Role == "listitem") throw new BackgroundNotApplicableException("Win32 list items have no safe UI Automation path");
+        if (target.FrameworkId == "Win32" && target.Role == "listitem") throw NothingSent("Win32 list items have no safe UI Automation path");
         var (purpose, call) = target.HasInvoke ? ("UIA Invoke (foreground)", "invoke")
             : target.Role is "edit" or "document" ? ("UIA SetFocus", "setFocus")
-            : throw new BackgroundNotApplicableException("No foreground UI Automation path for this control");
+            : throw NothingSent("No foreground UI Automation path for this control");
         int? quietMs = request.TryGetProperty("quietMs", out var q) && q.ValueKind == JsonValueKind.Number ? q.GetInt32() : null;
         using var token = ForegroundToken.Acquire(purpose);
         JulienPause.ThrowIfActive(quietMs);
         EmergencyStop.ThrowIfStopped();
         var noted = Win32.GetForegroundWindow();
         var input = Win32.Probe().LastInput; // UIA n'injecte aucune entree : tout changement vient de Julien ou d'un pair
+        InputStarted = true; // l'appel UIA peut agir
         try
         {
-            return ComBridge.Call(new { op = call, windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow }) with { Technique = "foreground:uia" };
+            return FirstCall(() => ComBridge.Call(new { op = call, windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow })) with { Technique = "foreground:uia" };
         }
         finally
         {
@@ -93,9 +95,12 @@ static partial class Program
         {
             int? quiet = request.TryGetProperty("quietMs", out var qm) && qm.ValueKind == JsonValueKind.Number ? qm.GetInt32() : null;
             var editable = target.Role is "edit" or "document";
-            if (op == "click" && editable) return ChromiumInput.Focus(window, target, quiet).Outcome;
-            if (op == "typeText" && editable) return ChromiumInput.Type(window, target, Text(request, "text"), quiet).Outcome;
-            if (op == "select" && target.Role == "combobox") return ChromiumInput.Select(window, target, Text(request, "option"), quiet).Outcome;
+            // Frontiere Chromium : preconditions, jeton, pause de Julien et STOP precedent toute entree ; « entree partie »
+            // seulement au premier message d'activation (relecture de Codex du 24/10).
+            void Started() => InputStarted = true;
+            if (op == "click" && editable) { InputStarted = false; return ChromiumInput.Focus(window, target, quiet, Started).Outcome; }
+            if (op == "typeText" && editable) { InputStarted = false; return ChromiumInput.Type(window, target, Text(request, "text"), quiet, Started).Outcome; }
+            if (op == "select" && target.Role == "combobox") { InputStarted = false; return ChromiumInput.Select(window, target, Text(request, "option"), quiet, Started).Outcome; }
         }
         var framework = target.FrameworkId;
         var classic = framework is "Win32" or "WinForm";
@@ -109,14 +114,14 @@ static partial class Program
             if (listBox != 0)
             {
                 if (op == "click" && target.RuntimeId[2] == ComUia.SyntheticItem) return ListBoxSelect(listBox, target.Name, target.RuntimeId[3]);
-                throw new BackgroundNotApplicableException("A list item read by messages only supports a click (selection)");
+                throw NothingSent("A list item read by messages only supports a click (selection)");
             }
             var combo = AncestorWindow(target, nodes, "combobox");
-            if (combo == 0) throw new ActionRefusedException("Control identity changed; inspect again");
+            if (combo == 0) throw RefusedBeforeInput("Control identity changed; inspect again");
             if (op == "click" && target.RuntimeId[2] == ComUia.SyntheticItem) return ComboSelect(combo, target.Name, target.RuntimeId[3]);
             if (target.RuntimeId[2] == ComUia.SyntheticEdit && op is ("setValue" or "typeText") && cls == "edit")
                 return EditReplace(own, Text(request, op == "setValue" ? "value" : "text"), replaceAll: op == "setValue");
-            throw new BackgroundNotApplicableException("This part of the combo box has no action: choose an option or act on the combo box");
+            throw NothingSent("This part of the combo box has no action: choose an option or act on the combo box");
         }
         switch (op)
         {
@@ -134,7 +139,7 @@ static partial class Program
                     // Element de la liste (ouverte ou non) d'une liste deroulante : choix par la liste deroulante elle-meme.
                     var combo = AncestorWindow(target, nodes, "combobox");
                     if (combo != 0) return ComboSelect(combo, target.Name);
-                    throw new BackgroundNotApplicableException("Classic list item outside a ListBox or ComboBox: UIA Select would be silent");
+                    throw NothingSent("Classic list item outside a ListBox or ComboBox: UIA Select would be silent");
                 }
                 if (classic && target.Role == "tab" && own == 0)
                 {
@@ -144,12 +149,12 @@ static partial class Program
                 if (framework == "Win32")
                 {
                     if (target.HasToggle) return UiaClick(window, target, invoke: false, select: false);
-                    throw new BackgroundNotApplicableException("Win32 control without a silent background technique (UIA Invoke would take the foreground)");
+                    throw NothingSent("Win32 control without a silent background technique (UIA Invoke would take the foreground)");
                 }
                 if (target.Role == "listitem" && AncestorNode(target, nodes, "combobox") is { } container)
                 {
                     // Option d'une liste deroulante UIA ouverte : choisie, puis la liste refermee.
-                    return ComBridge.Call(new { op = "selectItem", windowId = (long)window, runtimeId = target.RuntimeId, containerRuntimeId = container.RuntimeId });
+                    return FirstCall(() => ComBridge.Call(new { op = "selectItem", windowId = (long)window, runtimeId = target.RuntimeId, containerRuntimeId = container.RuntimeId }));
                 }
                 return UiaClick(window, target, invoke: true, select: framework != "WinForm");
             case "setValue":
@@ -161,7 +166,7 @@ static partial class Program
             }
             case "typeText":
                 if (classic && EditClasses.Contains(cls)) return EditReplace(own, Text(request, "text"), replaceAll: false);
-                throw new BackgroundNotApplicableException("Background typing needs a native Edit control");
+                throw NothingSent("Background typing needs a native Edit control");
             case "secondary":
             {
                 var action = Text(request, "action");
@@ -173,11 +178,31 @@ static partial class Program
                 var option = Text(request, "option");
                 if (classic && cls == "combobox") return ComboSelect(own, option);
                 if (classic && cls == "listbox") return ListBoxSelect(own, option);
-                if (classic) throw new BackgroundNotApplicableException("Classic list without a message technique: UIA Select would be silent");
-                return ComBridge.Call(new { op = "selectOption", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, option, combo = target.Role == "combobox" });
+                if (classic) throw NothingSent("Classic list without a message technique: UIA Select would be silent");
+                return FirstCall(() => ComBridge.Call(new { op = "selectOption", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, option, combo = target.Role == "combobox" }));
             }
             default: throw new InvalidOperationException("Unknown native operation");
         }
+    }
+
+    // Refus d'applicabilite de BackgroundAction/ForegroundAction, leves avant tout appel qui peut agir (seule la mesure
+    // Win32.Probe de RunAction les precede) : rien n'est parti, InputStarted redevient faux (relecture de Codex du 24/10 :
+    // sinon le client les lisait comme une issue inconnue, sans repli et accord consomme).
+    static BackgroundNotApplicableException NothingSent(string message) { InputStarted = false; return new(message); }
+    static ActionRefusedException RefusedBeforeInput(string message) { InputStarted = false; return new(message); }
+    // Premiere action de RunAction confiee au processus COM : son refus marque « avant tout motif » (beforeInput) precede
+    // toute entree de cette requete.
+    static Outcome FirstCall(Func<Outcome> call)
+    {
+        try { return call(); }
+        catch (BackgroundNotApplicableException error) when (error.Data["beforeInput"] is true) { throw NothingSent(error.Message); }
+        catch (EmergencyStopException error) when (error.Data["beforeInput"] is true) { InputStarted = false; throw; }
+    }
+    // Lecture prealable d'un auxiliaire (choix d'option sur des libelles lus) : son refus precede toute entree.
+    static T PreInput<T>(Func<T> read)
+    {
+        try { return read(); }
+        catch (BackgroundNotApplicableException error) { throw NothingSent(error.Message); }
     }
 
     static nint AncestorWindow(Node target, List<Node> nodes, string cls)
@@ -220,12 +245,12 @@ static partial class Program
 
     static Outcome ButtonClick(nint button)
     {
-        if (!Win32.IsWindowEnabled(button)) throw new BackgroundNotApplicableException("Button is disabled");
+        if (!Win32.IsWindowEnabled(button)) throw NothingSent("Button is disabled");
         var kind = Win32.Style(button) & 0xF;
-        if (kind == 7) throw new BackgroundNotApplicableException("Group box is not clickable");
+        if (kind == 7) throw NothingSent("Group box is not clickable");
         if (kind is 3 or 6) // BS_AUTOCHECKBOX, BS_AUTO3STATE : la case change d'etat puis notifie, comme un vrai clic.
         {
-            var state = Win32.Send(button, Win32.BM_GETCHECK) ?? throw new BackgroundNotApplicableException("Button does not answer");
+            var state = Win32.Send(button, Win32.BM_GETCHECK) ?? throw NothingSent("Button does not answer");
             var next = (state + 1) % (kind == 6 ? 3 : 2);
             Win32.Send(button, Win32.BM_SETCHECK, next);
             NotifyParent(button, 0 /* BN_CLICKED */);
@@ -253,23 +278,23 @@ static partial class Program
 
     static List<string?> Items(nint control, uint countMsg, uint lengthMsg, uint textMsg)
     {
-        var count = Win32.Send(control, countMsg) ?? throw new BackgroundNotApplicableException("List does not answer");
-        if (count < 0 || count > 5000) throw new BackgroundNotApplicableException("List is too large for a message selection");
+        var count = Win32.Send(control, countMsg) ?? throw NothingSent("List does not answer");
+        if (count < 0 || count > 5000) throw NothingSent("List is too large for a message selection");
         var items = new List<string?>((int)count);
         for (var i = 0; i < count; i++) items.Add(Win32.SendGetText(control, lengthMsg, textMsg, i, true));
         return items;
     }
     static Outcome ListBoxSelect(nint list, string option, int? rank = null)
     {
-        if ((Win32.Style(list) & (Win32.LBS_MULTIPLESEL | Win32.LBS_EXTENDEDSEL)) != 0) throw new BackgroundNotApplicableException("Multiple-selection list");
-        if (!Win32.IsWindowEnabled(list)) throw new BackgroundNotApplicableException("List is disabled");
+        if ((Win32.Style(list) & (Win32.LBS_MULTIPLESEL | Win32.LBS_EXTENDEDSEL)) != 0) throw NothingSent("Multiple-selection list");
+        if (!Win32.IsWindowEnabled(list)) throw NothingSent("List is disabled");
         // Liste dessinee par l'application (LBS_OWNERDRAWFIXED/VARIABLE) sans LBS_HASSTRINGS : LB_GETTEXT rend les donnees
         // de l'element, pas son libelle ; le choix par libelle serait faux (relecture de Codex, 21/10).
         var style = Win32.Style(list);
-        if ((style & 0x30) != 0 && (style & 0x40 /* LBS_HASSTRINGS */) == 0) throw new BackgroundNotApplicableException("Owner-drawn list without strings: labels cannot be read by messages");
+        if ((style & 0x30) != 0 && (style & 0x40 /* LBS_HASSTRINGS */) == 0) throw NothingSent("Owner-drawn list without strings: labels cannot be read by messages");
         var items = Items(list, Win32.LB_GETCOUNT, Win32.LB_GETTEXTLEN, Win32.LB_GETTEXT);
-        if (rank is { } r && (r < 0 || r >= items.Count || items[r] != option)) throw new ActionRefusedException("List items changed; inspect again");
-        var index = rank ?? MatchOption(items, option);
+        if (rank is { } r && (r < 0 || r >= items.Count || items[r] != option)) throw RefusedBeforeInput("List items changed; inspect again");
+        var index = rank ?? PreInput(() => MatchOption(items, option));
         Win32.Send(list, Win32.LB_SETCURSEL, index);
         if (Win32.Send(list, Win32.LB_GETCURSEL) != index) return new(Messages, "LB_SETCURSEL", "none");
         NotifyParent(list, 1 /* LBN_SELCHANGE */);
@@ -281,10 +306,10 @@ static partial class Program
     // « Formule= » vide). Puis CB_SETCURSEL relu, et CBN_SELCHANGE + CBN_SELENDOK au parent, comme un choix de l'utilisateur.
     static Outcome ComboSelect(nint combo, string option, int? rank = null)
     {
-        if (!Win32.IsWindowEnabled(combo)) throw new BackgroundNotApplicableException("Combo box is disabled");
+        if (!Win32.IsWindowEnabled(combo)) throw NothingSent("Combo box is disabled");
         var items = Items(combo, Win32.CB_GETCOUNT, Win32.CB_GETLBTEXTLEN, Win32.CB_GETLBTEXT);
-        if (rank is { } r && (r < 0 || r >= items.Count || items[r] != option)) throw new ActionRefusedException("Combo box options changed; inspect again");
-        var index = rank ?? MatchOption(items, option);
+        if (rank is { } r && (r < 0 || r >= items.Count || items[r] != option)) throw RefusedBeforeInput("Combo box options changed; inspect again");
+        var index = rank ?? PreInput(() => MatchOption(items, option));
         var dropped = Win32.Send(combo, Win32.CB_GETDROPPEDSTATE) is > 0;
         var mechanism = "CB_SETCURSEL+CBN_SELCHANGE+CBN_SELENDOK";
         if (dropped)
@@ -305,10 +330,10 @@ static partial class Program
     // Ouverture ou fermeture de la liste d'une liste deroulante Win32/WinForms, relue par CB_GETDROPPEDSTATE.
     static Outcome ComboDropDown(nint combo, string action)
     {
-        if (action is not ("Expand" or "Collapse")) throw new BackgroundNotApplicableException("Only Expand and Collapse are background secondary actions");
-        if (!Win32.IsWindowEnabled(combo)) throw new BackgroundNotApplicableException("Combo box is disabled");
+        if (action is not ("Expand" or "Collapse")) throw NothingSent("Only Expand and Collapse are background secondary actions");
+        if (!Win32.IsWindowEnabled(combo)) throw NothingSent("Combo box is disabled");
         var want = action == "Expand";
-        var before = Win32.Send(combo, Win32.CB_GETDROPPEDSTATE) ?? throw new BackgroundNotApplicableException("Combo box does not answer");
+        var before = Win32.Send(combo, Win32.CB_GETDROPPEDSTATE) ?? throw NothingSent("Combo box does not answer");
         EmergencyStop.ThrowIfStopped();
         Win32.Send(combo, Win32.CB_SHOWDROPDOWN, want ? 1 : 0);
         var after = Win32.Send(combo, Win32.CB_GETDROPPEDSTATE);
@@ -321,16 +346,16 @@ static partial class Program
         if (items.Count(i => i != null && Label(i) == Label(value)) == 1) return ComboSelect(combo, value);
         var edit = Win32.FindWindowExW(combo, 0, "Edit", null);
         if (edit != 0) return EditReplace(edit, value, replaceAll: true);
-        throw new BackgroundNotApplicableException("Value is not one of the combo box options");
+        throw NothingSent("Value is not one of the combo box options");
     }
     static Outcome EditReplace(nint edit, string text, bool replaceAll)
     {
         var style = Win32.Style(edit);
-        if ((style & Win32.ES_PASSWORD) != 0) throw new ActionRefusedException("Password controls require the dedicated supported workflow");
-        if ((style & Win32.ES_READONLY) != 0) throw new BackgroundNotApplicableException("Read-only field");
-        if (!Win32.IsWindowEnabled(edit)) throw new BackgroundNotApplicableException("Field is disabled");
+        if ((style & Win32.ES_PASSWORD) != 0) throw RefusedBeforeInput("Password controls require the dedicated supported workflow");
+        if ((style & Win32.ES_READONLY) != 0) throw NothingSent("Read-only field");
+        if (!Win32.IsWindowEnabled(edit)) throw NothingSent("Field is disabled");
         var multiline = (style & Win32.ES_MULTILINE) != 0;
-        if (!multiline && (text.Contains('\n') || text.Contains('\r'))) throw new BackgroundNotApplicableException("A single-line field cannot receive line breaks in background");
+        if (!multiline && (text.Contains('\n') || text.Contains('\r'))) throw NothingSent("A single-line field cannot receive line breaks in background");
         var payload = multiline ? Norm(text).Replace("\n", "\r\n") : text;
         var before = Norm(Win32.WindowText(edit));
         if (replaceAll && Win32.Send(edit, Win32.EM_SETSEL, 0, -1) is null) throw new BackgroundNotApplicableException("Field does not answer");
@@ -345,8 +370,8 @@ static partial class Program
     }
     static Outcome TabSelect(nint tabs, int index)
     {
-        var count = Win32.Send(tabs, Win32.TCM_GETITEMCOUNT) ?? throw new BackgroundNotApplicableException("Tab control does not answer");
-        if (index < 0 || index >= count) throw new BackgroundNotApplicableException("Tab not found in the control");
+        var count = Win32.Send(tabs, Win32.TCM_GETITEMCOUNT) ?? throw NothingSent("Tab control does not answer");
+        if (index < 0 || index >= count) throw NothingSent("Tab not found in the control");
         // TCM_SETCURFOCUS choisit l'onglet et notifie le parent (TCN_SELCHANGING/TCN_SELCHANGE), sans souris.
         Win32.Send(tabs, Win32.TCM_SETCURFOCUS, index);
         return new(Messages, "TCM_SETCURFOCUS", Win32.Send(tabs, Win32.TCM_GETCURSEL) == index ? "applied" : "none");
@@ -581,13 +606,13 @@ static partial class Program
         string[] order = target.Role is "checkbox" ? ["toggle", "invoke"] :
             target.Role is "radio" or "listitem" or "tab" or "treeitem" ? ["select", "invoke", "toggle"] : ["invoke", "toggle", "select"];
         order = order.Where(p => (p != "invoke" || invoke) && (p != "select" || select)).ToArray();
-        return ComBridge.Call(new { op = "click", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, order });
+        return FirstCall(() => ComBridge.Call(new { op = "click", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, order }));
     }
     static Outcome UiaSetValue(nint window, Node target, string value) =>
-        ComBridge.Call(new { op = "setValue", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, value });
+        FirstCall(() => ComBridge.Call(new { op = "setValue", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, value }));
     static Outcome UiaExpandCollapse(nint window, Node target, string action)
     {
-        if (action is not ("Expand" or "Collapse")) throw new BackgroundNotApplicableException("Only Expand and Collapse are background secondary actions");
-        return ComBridge.Call(new { op = "expandCollapse", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, action });
+        if (action is not ("Expand" or "Collapse")) throw NothingSent("Only Expand and Collapse are background secondary actions");
+        return FirstCall(() => ComBridge.Call(new { op = "expandCollapse", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow, action }));
     }
 }

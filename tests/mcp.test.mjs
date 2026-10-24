@@ -69,7 +69,7 @@ test('look chooses one window, act needs a fresh look and reports marks', async 
   await assert.rejects(tools.call('look', { window: 'note' }), /2 windows match/);
   const seen = await tools.call('look', { window: 'Notes' });
   assert.match(seen[0].text, /^window 1 "Notes"/);
-  assert.deepEqual(calls.slice(0, 2), [['bind', 1], ['observe', { mode: 'text', backend: 'native', capture: 'native' }]]);
+  assert.deepEqual(calls.slice(0, 2), [['bind', 1], ['observe', { mode: 'text', backend: 'native', capture: 'native', zoom: null }]]);
   const [report] = await tools.call('act', { steps: [{ kind: 'click' }] });
   assert.match(report.text, /^✓ click — verified \(background:uia\)/);
   await assert.rejects(tools.call('act', { steps: [{ kind: 'click' }] }), /Look at the window first/);

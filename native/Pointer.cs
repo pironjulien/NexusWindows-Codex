@@ -5,7 +5,8 @@ using System.Runtime.InteropServices;
 // plan et curseur intacts. Le cadre DWM releve a la capture est relu juste avant l'entree : fenetre deplacee ou
 // redimensionnee = refus (observer de nouveau). Win32 et WinForms ; Chromium : clic poste, molette par DevTools si la
 // cible a un port de debogage (Cdp.cs ; molette postee ignoree, mesure) ; WPF : molette par defilement semantique UI
-// Automation (ComWorker scrollAt). UWP, Tk, et le reste de WPF : non applicable (souris postee ignoree).
+// Automation (ComWorker scrollAt) ; Tk : clic envoye avec le bouton simule pour son fil, liste defilee par sa barre
+// native (TkInput.cs). UWP et le reste de WPF : non applicable (souris postee ignoree).
 static class Pointer
 {
     [DllImport("user32.dll")] static extern nint ChildWindowFromPointEx(nint parent, Win32.Point point, uint flags);
@@ -72,9 +73,10 @@ static class Pointer
         var cls = ClassOf(window);
         var chromium = cls.StartsWith("Chrome_WidgetWin_");
         var wpf = cls.StartsWith("HwndWrapper");
+        var tk = cls == "TkTopLevel";
         var classic = !chromium && !wpf && cls != "ApplicationFrameWindow" && !cls.StartsWith("Windows.UI.") &&
             cls != "TkTopLevel" && !cls.StartsWith("Mozilla");
-        if (!classic && !(chromium && action is "click" or "wheel") && !(wpf && action == "wheel"))
+        if (!classic && !(chromium && action is "click" or "wheel") && !(wpf && action == "wheel") && !(tk && action is "click" or "wheel"))
             throw new BackgroundNotApplicableException("This interface ignores posted mouse input (measured): no background technique");
         if (!Win32.IsWindowEnabled(window)) throw new ActionRefusedException("Window is disabled (a modal dialog may be open)");
         if (Win32.IsIconic(window)) throw new ActionRefusedException("Window is minimized: observe again");
@@ -95,6 +97,15 @@ static class Pointer
         }
         if (action == "wheel" && chromium) return Cdp.Wheel(window, x, y, deltaY, deltaX, started);
         var target = DeepestChild(window, x, y);
+        if (tk && action == "wheel") return TkInput.Scroll(target, deltaY, deltaX, started);
+        if (tk)
+        {
+            var at = new Win32.Point { X = x, Y = y };
+            ScreenToClient(target, ref at);
+            var ratio = Capture.Scale(target);
+            if (ratio != 1.0) at = new Win32.Point { X = (int)Math.Round(at.X / ratio), Y = (int)Math.Round(at.Y / ratio) };
+            return TkInput.Click(target, Lparam(at.X, at.Y), button, count, started);
+        }
         // WinForms ne leve DoubleClick que si la fenetre au point (hit-test) est le controle lui-meme : point recouvert,
         // double clic poste sans effet (banc commun du 22/10, les trois outils) ; rien n'est envoye, l'entree physique
         // (premier plan bref) s'en charge si elle est permise.

@@ -98,6 +98,7 @@ static partial class Program
         string? requestId = null;
         object result;
         int code = 0;
+        InputStarted = false; // une requete rejetee avant Execute n'herite jamais de l'etat de la precedente
         try
         {
             if (input.Length > 262144) throw new InvalidOperationException("Request is too large");
@@ -117,7 +118,9 @@ static partial class Program
         }
         catch (Exception error)
         {
-            result = new { ok = false, error = error.GetType().Name, message = error.Message };
+            // inputStarted : une entree a pu partir avant l'erreur (relecture de Codex du 24/10) ; le client la rend
+            // terminale (issue inconnue, accord consomme, aucun repli), quel que soit le type de l'exception.
+            result = new { ok = false, error = error.GetType().Name, message = error.Message, inputStarted = InputStarted };
             code = 1;
         }
         if (server) Write(new { requestId, result }); else Write(result);
@@ -196,7 +199,12 @@ static partial class Program
             }
             if (!string.Equals(app, actualApp, StringComparison.OrdinalIgnoreCase))
                 throw Refuse($"Window application identity differs: {actualApp}");
-            if (op == "capture") return Capture.Window(hwnd, Text(request, "directory"));
+            if (op == "capture")
+            {
+                int[]? zoom = request.TryGetProperty("zoom", out var z) && z.ValueKind == JsonValueKind.Array
+                    ? z.EnumerateArray().Select(v => v.GetInt32()).ToArray() : null;
+                return Capture.Window(hwnd, Text(request, "directory"), zoom);
+            }
             if (op == "related") return Related(hwnd, pid);
             if (op == "menu") return MenuCommand(hwnd, Text(request, "path"));
             if (op == "key") return KeyAction(hwnd, Text(request, "key"));
@@ -594,6 +602,33 @@ static partial class Program
     // Resultat : les nouvelles fenetres d'application, stables 600 ms et relues a la fin. Une fenetre n'est attribuee au
     // lancement que sur preuve (processus demarre, ou processus ne apres le lancement qui est l'application visee) ;
     // sinon elle est rendue comme candidate et l'issue reste inconnue (relectures de Codex du 23/10).
+    // Application Chromium/Electron (recette commune du banc, 24/10) : lancee telle quelle et recouverte des son
+    // demarrage, elle ne se dessine ni ne publie sa page a l'accessibilite (Logi Options+ violet derriere Claude
+    // agrandi ; banc « lancement recouvert » : selecteur introuvable, 0/3). Reconnue a ses ressources, jamais a son nom,
+    // elle recoit le suivi d'occlusion coupe et l'accessibilite forcee ; un seul --disable-features (Chromium ne retient
+    // que le dernier). Seulement pour un executable donne par son chemin : aucun argument ne vient du modele.
+    internal const string ChromiumSwitches = "--disable-features=CalculateNativeWinOcclusion --force-renderer-accessibility";
+
+    internal static bool IsChromiumApp(string exePath)
+    {
+        var folder = System.IO.Path.GetDirectoryName(exePath) ?? "";
+        return exePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && (
+            File.Exists(System.IO.Path.Combine(folder, "resources", "app.asar"))
+            || Directory.Exists(System.IO.Path.Combine(folder, "resources", "app"))
+            || File.Exists(System.IO.Path.Combine(folder, "chrome_100_percent.pak")));
+    }
+
+    internal static ProcessStartInfo LaunchInfo(string start, string? exePath)
+    {
+        var info = new ProcessStartInfo(start) { UseShellExecute = true };
+        if (exePath != null && File.Exists(exePath) && IsChromiumApp(exePath))
+        {
+            info.Arguments = ChromiumSwitches;
+            info.WorkingDirectory = System.IO.Path.GetDirectoryName(exePath) ?? "";
+        }
+        return info;
+    }
+
     static object Launch(string target, int? quietMs)
     {
         target = target.Trim();
@@ -667,7 +702,7 @@ static partial class Program
             InputStarted = true;
             try
             {
-                using var started = Process.Start(new ProcessStartInfo(start) { UseShellExecute = true });
+                using var started = Process.Start(LaunchInfo(start, exePath));
                 try { if (started != null) startedPid = started.Id; } catch (InvalidOperationException) { }
             }
             catch (System.ComponentModel.Win32Exception error) { throw new ActionRefusedException("Nothing to launch at this name or path (" + error.Message + "); nothing was launched"); }

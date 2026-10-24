@@ -30,23 +30,24 @@ static class ChromiumInput
     static nint Top(nint window) => Win32.GetAncestor(window, Win32.GA_ROOT) is var root && root != 0 ? root : window;
 
     // Clic sur une surface editable Chromium : focus sans activation, relu.
-    public static Result Focus(nint window, Node target, int? quietMs) =>
-        Run(window, target, quietMs, "focus", (_, _) => new("background:simulated-activation", "accSelect focus (simulated activation)", "applied"));
+    // started : appele juste avant le premier message d'activation (RunAction : « entree partie » a partir de la seulement).
+    public static Result Focus(nint window, Node target, int? quietMs, Action? started = null) =>
+        Run(window, target, quietMs, "focus", started, (_, _) => new("background:simulated-activation", "accSelect focus (simulated activation)", "applied"));
 
     // <select> Chromium : focus puis frappe du libelle (une unite) ; la recherche au clavier choisit l'option.
-    public static Result Select(nint window, Node target, string option, int? quietMs)
+    public static Result Select(nint window, Node target, string option, int? quietMs, Action? started = null)
     {
         if (option.Length == 0 || option.Length > 64) throw new BackgroundNotApplicableException("Option label must be 1 to 64 characters to be typed");
-        return Run(window, target, quietMs, "select", (top, deadline) =>
+        return Run(window, target, quietMs, "select", started, (top, deadline) =>
             TypeUnits(window, target, top, option, deadline, [option], _ => null, value => Same(value, option), "option typed"));
     }
 
     // Texte ajoute en fin d'un champ ou editeur riche Chromium (caret place en fin, relu unite par unite).
-    public static Result Type(nint window, Node target, string text, int? quietMs)
+    public static Result Type(nint window, Node target, string text, int? quietMs, Action? started = null)
     {
         if (text.Length == 0) throw new BackgroundNotApplicableException("Nothing to type");
         if (text.Contains('\n') || text.Contains('\r')) throw new BackgroundNotApplicableException("Line breaks are typed by the physical fallback (Chromium inserts them only from the key)");
-        return Run(window, target, quietMs, "type", (top, deadline) =>
+        return Run(window, target, quietMs, "type", started, (top, deadline) =>
         {
             var before = ReadValue(window, target, deadline) ?? throw new BackgroundNotApplicableException("Field value unreadable: nothing was typed");
             Call(new { op = "caretToEnd", windowId = (long)window, runtimeId = target.RuntimeId, nativeWindow = (long)target.NativeWindow }, deadline);
@@ -145,7 +146,7 @@ static class ChromiumInput
         }
     }
 
-    static Result Run(nint window, Node target, int? quietMs, string purpose, Func<nint, long, Outcome> act)
+    static Result Run(nint window, Node target, int? quietMs, string purpose, Action? started, Func<nint, long, Outcome> act)
     {
         var top = Top(window);
         if (!Win32.ClassName(top).StartsWith("Chrome_WidgetWin_", StringComparison.Ordinal))
@@ -162,8 +163,11 @@ static class ChromiumInput
         var first = !Primed.Contains(pid);
         var taken = false;
         string? giveBack = null;
+        var activated = false; // aucun message d'activation avant : rien a defaire en sortie
         try
         {
+            started?.Invoke();
+            activated = true; // preconditions, jeton, pause et STOP passes : le premier message d'activation part
             Activate(top);
             Focus(window, target, deadline);
             if (first)
@@ -192,7 +196,8 @@ static class ChromiumInput
         }
         finally
         {
-            if (Top(Win32.GetForegroundWindow()) != top)
+            if (!activated) { }
+            else if (Top(Win32.GetForegroundWindow()) != top)
             {
                 try { Win32.Post(top, WM_ACTIVATE, 0 /* WA_INACTIVE */, 0); Win32.Post(top, WM_NCACTIVATE, 0, 0); } catch (InvalidOperationException) { }
                 Thread.Sleep(30);
