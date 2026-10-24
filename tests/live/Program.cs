@@ -82,6 +82,8 @@ static class Program
         send.Click += (_, _) => status.Text = "Envoyé " + Count("winforms.sends");
         form.AcceptButton = send;
         name.TextChanged += (_, _) => { Count("winforms.textChanged"); Record("winforms.text", name.Text); };
+        // Preuve durable du repli au premier plan : le champ a recu le focus (le focus clavier global repart avec le premier plan).
+        name.GotFocus += (_, _) => Count("winforms.nameFocus");
         option.CheckedChanged += (_, _) => { Count("winforms.checkChanged"); Record("winforms.checked", option.Checked); status.Text = "Option " + (option.Checked ? "oui" : "non"); };
         save.Click += (_, _) => status.Text = "Enregistré " + Count("winforms.saves");
         color.SelectedIndexChanged += (_, _) => { Count("winforms.colorChanged"); status.Text = "Couleur " + color.SelectedItem; };

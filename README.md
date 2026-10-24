@@ -101,7 +101,7 @@ the JavaScript module cache does not reload.
 | Tool | Purpose |
 |---|---|
 | `windows(filter)` | Application windows (id, app, title, pid), like the taskbar; password managers never listed |
-| `look(window, mode, region)` | One window by id or a unique part of its title or app: UI Automation tree, plus a capture that works on covered windows with `mode="image"` or `"both"`; `region` zooms on an area of the last image; selects the window for `act` |
+| `look(window, mode, region, marks)` | One window by id or a unique part of its title or app: UI Automation tree, plus a capture that works on covered windows with `mode="image"` or `"both"`; `region` zooms on an area of the last image; `marks` draws tree line numbers on the image; selects the window for `act` |
 | `act(steps)` | One step, or up to 32 each with its own `expect`, on the window of the last `look`; stops at the first step not verified |
 | `launch(app)` | Start an application (name, path, Store app id), a folder, a document or a Settings page (`ms-settings:`) and give the foreground back |
 | `window(action, window)` | `action="close"`: one close message, read back; a "save?" prompt is reported, never answered |
@@ -202,7 +202,10 @@ evidence for the model, and the coordinate frame of a point action that names th
 to the screen pixel. `look(region=[x1, y1, x2, y2])` reads an area of the last full image at full resolution, enlarged
 up to 2x for small text; its own `screenshotId` takes points. An image identical to the last one sent for that window
 (same pixels and frame) is not attached again; the reply names the id that takes points, and `mode="image"` always
-attaches it.
+attaches it. `look(mode="both", marks="auto"|"all")` reads the tree just before the capture and draws on the image the
+tree line number of each kept element (`auto`: unnamed controls; `all`: every element with a rectangle), at a constant
+size after scaling; no number when the window moved between the two reads, on another window's popup, or when the
+label does not fit whole. Default `none`. Numbers link the image to the tree; `act` still targets a selector or a point.
 
 ### Verified batches (`actBatch`)
 

@@ -29,7 +29,26 @@ static class Capture
     // comme pour toute image native (nativeScreen).
     const double ZoomMaxEnlarge = 2.0;
 
-    public static object Window(nint hwnd, string directory, int[]? zoom = null)
+    // Cadre ECRAN entier de la fenetre (cadre DWM borne a la fenetre, pixels physiques) : celui que Window rend en
+    // windowFrame. inspect le relit avant et apres l'arbre ; marks n'est dessine que si la capture voit le meme cadre.
+    public static Win32.Rect? Area(nint hwnd)
+    {
+        var previous = Win32.SetThreadDpiAwarenessContext(PerMonitorAwareV2);
+        try
+        {
+            if (Win32.IsIconic(hwnd) || !Win32.GetWindowRect(hwnd, out var window) || window.Empty) return null;
+            var frame = Win32.DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, out var f, 16) == 0 && !f.Empty ? f : window;
+            var crop = frame.Intersect(window);
+            return crop.Empty ? window : crop;
+        }
+        finally { Win32.SetThreadDpiAwarenessContext(previous); }
+    }
+
+    static bool Same(Win32.Rect a, Win32.Rect b) => a.Left == b.Left && a.Top == b.Top && a.Right == b.Right && a.Bottom == b.Bottom;
+
+    // marks : elements numerotes (Marks.cs), treeFrame : cadre lu avec l'arbre ; absent ou different du cadre capture
+    // (fenetre deplacee entre les deux lectures) → aucune marque, la raison est rendue.
+    public static object Window(nint hwnd, string directory, int[]? zoom = null, List<Mark>? marks = null, Win32.Rect? treeFrame = null)
     {
         if (!Path.IsPathFullyQualified(directory)) throw new InvalidOperationException("Capture directory must be absolute");
         foreach (var variable in new[] { "OneDrive", "OneDriveConsumer", "OneDriveCommercial" })
@@ -65,14 +84,31 @@ static class Capture
                 crop = area;
                 enlarge = ZoomMaxEnlarge;
             }
-            var (deviation, uniformity) = Statistics(pixels, crop.Width, crop.Height);
+            var (deviation, uniformity) = Statistics(pixels, crop.Width, crop.Height); // avant toute marque
             var blank = deviation < 1.5;
+            MarkReport? report = null;
+            Func<byte[], int, int, byte[]>? annotate = null;
+            if (marks != null)
+            {
+                report = new MarkReport();
+                // Cadre relu APRES PrintWindow aussi : une fenetre agrandie pendant la capture laisserait des marques a
+                // l'ancien emplacement (relecture de Codex du 24/10).
+                var printed = Area(hwnd);
+                if (treeFrame is not { } t || !Same(t, windowArea) || printed is not { } p || !Same(p, windowArea))
+                    report.Reason = "window moved or resized between the tree read and the capture: no numbers";
+                else
+                {
+                    var scoped = Marks.Scoped(hwnd, marks, report);
+                    var area = crop;
+                    annotate = (image, w, h) => Marks.Draw(image, w, h, area, scoped, report);
+                }
+            }
             string? file = null;
             int imageWidth = crop.Width, imageHeight = crop.Height;
             var encoding = "";
             if (!blank)
             {
-                var (bytes, w, h, how) = Encode(pixels, crop.Width, crop.Height, enlarge);
+                var (bytes, w, h, how) = Encode(pixels, crop.Width, crop.Height, enlarge, annotate);
                 imageWidth = w; imageHeight = h; encoding = how;
                 Directory.CreateDirectory(directory);
                 file = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".webp");
@@ -85,6 +121,7 @@ static class Capture
                 deviation = Math.Round(deviation, 2), uniformity = Math.Round(uniformity, 3), ms = timer.ElapsedMilliseconds,
                 frame = new { left = crop.Left, top = crop.Top, width = crop.Width, height = crop.Height },
                 windowFrame = new { left = windowArea.Left, top = windowArea.Top, width = windowArea.Width, height = windowArea.Height },
+                marks = report == null ? null : blank ? new MarkReport { Reason = "blank capture: no numbers" }.Json() : report.Json(),
             };
         }
         finally { Win32.SetThreadDpiAwarenessContext(previous); }
@@ -131,13 +168,15 @@ static class Capture
     }
 
     // Taille et encodage de l'image envoyee au modele (regle commune ci-dessus).
-    static (byte[] Bytes, int Width, int Height, string How) Encode(byte[] pixels, int width, int height, double enlarge = 1.0)
+    // annotate : numeros dessines sur l'image deja reduite, a chaque tentative (taille constante dans l'image finale).
+    static (byte[] Bytes, int Width, int Height, string How) Encode(byte[] pixels, int width, int height, double enlarge = 1.0, Func<byte[], int, int, byte[]>? annotate = null)
     {
         var fit = Math.Min(enlarge, Math.Min(MaxSide / (double)Math.Max(width, height), Math.Sqrt(MaxPixels / ((double)width * height))));
         for (var attempt = 0; ; attempt++)
         {
             int w = Math.Max(1, (int)Math.Floor(width * fit)), h = Math.Max(1, (int)Math.Floor(height * fit));
             var image = w == width && h == height ? pixels : w > width ? Resize(pixels, width, height, w, h) : Shrink(pixels, width, height, w, h);
+            if (annotate != null) image = annotate(image, w, h);
             var bytes = WebP.Lossless(image, w, h);
             var how = "webp-lossless";
             if (bytes.Length > LosslessBudget)

@@ -837,6 +837,25 @@ test('a modal dialog Sky does not list is followed when the helper attests owner
   assert.equal(saved.observation.window.nativeOnly, undefined);
 });
 
+// Zone de zoom calculée sur l'image de la fenêtre 10 : un dialogue suivi entre-temps change le repère (relecture de Codex
+// du 24/10) ; refus avant toute capture.
+test('a zoom region of the parent image is refused once a dialog is followed', async t => {
+  const sky = provider();
+  const native = modalNative(sky);
+  let captured = 0;
+  native.capture = async () => { captured++; return { path: null, blank: true, frame: { left: 0, top: 0, width: 10, height: 10 } }; };
+  const session = new WindowsSession(sky, { native });
+  t.after(() => session.close());
+  await session.bind({ id: 10 });
+  const old = await session.observe({ backend: 'native' });
+  native.state.open = true; // dialogue apparu
+  await assert.rejects(session.observe({ mode: 'both', backend: 'native', capture: 'native', zoom: [0, 0, 10, 10], zoomWindow: 10 }),
+    /region comes from an image of window 10, but the observed window is now 20/);
+  assert.equal(captured, 0);
+  await assert.rejects(session.act(old, { kind: 'click', selector: button }), /Stale/); // l'ancienne n'est plus utilisable
+  assert.equal(native.state.ops.length, 0);
+});
+
 test('a dialog of another process is never followed without Sky', async t => {
   const sky = provider();
   const native = modalNative(sky, { pid: 99 });

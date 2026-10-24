@@ -386,10 +386,16 @@ test('live background validation on self-created covered windows', { skip: !exec
     }, async () => {
       await session.bind({ id: ready.winforms });
       const obs = await session.observe();
-      const result = await session.act(obs, { kind: 'click', selector: { automationId: 'nom', role: 'edit' }, expect: { selector: { automationId: 'nom' }, field: 'focused', equals: true } });
-      assert.equal(result.status, 'verified');
+      // Juge : le compteur de focus de la fixture, pas focused=true après coup (le premier plan rendu à Julien emporte le
+      // focus clavier global ; avis de Codex du 24/10). Technique et restitution vérifiées à part.
+      const focusBefore = (await state())['winforms.nameFocus'] ?? 0;
+      const result = await session.act(obs, { kind: 'click', selector: { automationId: 'nom', role: 'edit' } });
       assert.equal(result.technique, 'foreground:uia');
       assert.equal(result.attempts[0].outcome, 'not-applicable');
+      assert.equal(result.foregroundTaken, true);
+      assert.equal(result.foregroundReturned, 'restored');
+      assert.ok(((await state())['winforms.nameFocus'] ?? 0) > focusBefore, 'the field received the focus');
+      assert.notEqual(result.status, 'verified'); // aucune postcondition demandée : jamais un faux « vérifié »
       measures.push({ label: 'Foreground fallback (SetFocus)', technique: result.technique, durationMs: result.durationMs, foregroundTaken: result.foregroundTaken });
     });
   } finally {

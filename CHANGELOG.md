@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.1] - 2026-10-24 — Numbers on the image
+
+### Added
+- `look(marks="auto"|"all")` (mode both, native tree): the tree is read just before the capture, once, under the same
+  lock; each kept element gets its exact tree line number drawn on the image (digits only, built-in 5×7 font ×2, thin
+  outline), after scaling and before encoding, so at a constant size in the final image. `auto`: unnamed controls with
+  a rectangle; `all`: every element with a rectangle. Default `none`.
+- Guards: the window frame is read before and after the tree and after PrintWindow; if it moved or was resized, no
+  number and the reason is given. Elements of another window (popup menu absent from PrintWindow) are never labelled;
+  a blank capture is judged before any drawing; a label that does not fit whole is omitted, never cut; labels without
+  room, past 120, or past 400 eligible elements are counted in the report.
+
+### Fixed
+- A zoom region computed on one window's image, after a dialog has been followed, is refused before any capture
+  (before, the parent's area was read in the dialog).
+- A refused or failed `look` no longer leaves the previous observation usable by `act`.
+- Live test of the foreground fallback: it had never run (always skipped while the user was active) and failed as
+  soon as it ran, 3.0.1 included, because it required `focused` after the foreground was given back. It is now judged
+  by the fixture's focus counter, the technique and the give-back, with no postcondition.
+
+### Security
+- Reviewed by the Codex agent over three rounds (cut label reported as drawn, window resized during PrintWindow, zoom
+  region applied to a followed dialog, stale observation after a refused look, silent 400 cap).
+
 ## [3.1.0] - 2026-10-24 — Tk in the background, common image rule, zoom
 
 ### Added

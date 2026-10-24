@@ -203,7 +203,24 @@ static partial class Program
             {
                 int[]? zoom = request.TryGetProperty("zoom", out var z) && z.ValueKind == JsonValueKind.Array
                     ? z.EnumerateArray().Select(v => v.GetInt32()).ToArray() : null;
-                return Capture.Window(hwnd, Text(request, "directory"), zoom);
+                // Numeros (Marks.cs) : [{index, bounds:[x,y,w,h] ecran, scope: HWND porteur ou 0}] et cadre lu avec l'arbre.
+                List<Mark>? marks = null;
+                Win32.Rect? treeFrame = null;
+                if (request.TryGetProperty("marks", out var m) && m.ValueKind == JsonValueKind.Array)
+                {
+                    marks = [];
+                    foreach (var e in m.EnumerateArray().Take(400))
+                    {
+                        if (!e.TryGetProperty("bounds", out var b) || b.ValueKind != JsonValueKind.Array || b.GetArrayLength() != 4) continue;
+                        var v = b.EnumerateArray().Select(x => (int)Math.Round(x.GetDouble())).ToArray();
+                        if (v[2] <= 0 || v[3] <= 0) continue;
+                        marks.Add(new Mark(e.GetProperty("index").GetInt32(), v[0], v[1], v[2], v[3], e.TryGetProperty("scope", out var s) ? s.GetInt64() : 0));
+                    }
+                    if (request.TryGetProperty("treeFrame", out var t) && t.ValueKind == JsonValueKind.Object)
+                        treeFrame = new Win32.Rect { Left = t.GetProperty("left").GetInt32(), Top = t.GetProperty("top").GetInt32(),
+                            Right = t.GetProperty("left").GetInt32() + t.GetProperty("width").GetInt32(), Bottom = t.GetProperty("top").GetInt32() + t.GetProperty("height").GetInt32() };
+                }
+                return Capture.Window(hwnd, Text(request, "directory"), zoom, marks, treeFrame);
             }
             if (op == "related") return Related(hwnd, pid);
             if (op == "menu") return MenuCommand(hwnd, Text(request, "path"));
@@ -220,8 +237,12 @@ static partial class Program
             if (op == "inspect")
             {
                 var clock = Stopwatch.StartNew();
+                var before = full == null ? Capture.Area(hwnd) : null; // arbre deja lu (ApplicationFrameHost) : cadre inconnu
                 var read = Full().Nodes;
-                return Inspect(read, contentPid, actualApp, pid, clock.ElapsedMilliseconds);
+                var after = Capture.Area(hwnd);
+                // Cadre de l'arbre : le meme avant et apres la lecture, sinon aucun (pas de numeros sur une capture).
+                var frame = before is { } f0 && after is { } f1 && f0.Left == f1.Left && f0.Top == f1.Top && f0.Right == f1.Right && f0.Bottom == f1.Bottom ? f1 : (Win32.Rect?)null;
+                return Inspect(read, contentPid, actualApp, pid, clock.ElapsedMilliseconds, frame);
             }
 
             // Actions. Observation native (identite d'execution et chaine des ancetres fournies) : relecture limitee a la
@@ -343,7 +364,7 @@ static partial class Program
         return ((int)Math.Round((left + right) / 2), (int)Math.Round((top + bottom) / 2));
     }
 
-    static object Inspect(List<Node> nodes, int contentPid, string actualApp, uint pid, long treeMs)
+    static object Inspect(List<Node> nodes, int contentPid, string actualApp, uint pid, long treeMs, Win32.Rect? frame = null)
     {
         ClassicCombos(nodes);
         var tree = new StringBuilder();
@@ -377,6 +398,7 @@ static partial class Program
         var executable = ImagePath(contentPid) ?? throw new InvalidOperationException("Application binary unavailable");
         var revision = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(executable + ":" + File.GetLastWriteTimeUtc(executable).Ticks + ":" + new FileInfo(executable).Length))).ToLowerInvariant();
         return new { ok = true, processId = pid, app = actualApp, revision, treeMs,
+            frame = frame is { } r ? new { left = r.Left, top = r.Top, width = r.Width, height = r.Height } : null,
             accessibility = new { tree = tree.ToString(), focused_element = focused == null ? null : $"{focused.Index} {focused.Role} {focused.Name}", document_text = document, document_truncated = documentTruncated },
             elements = nodes.Select(n => new { index = n.Index, depth = n.Depth * 2, role = n.Role, name = n.Name, automationId = n.AutomationId,
                 value = n.Value, valueTruncated = n.ValueTruncated, description = n.Description, disabled = n.Disabled, selected = n.Selected, @checked = n.Checked,
